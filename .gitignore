@@ -1,0 +1,9 @@
+.env
+.env.local
+backend/cbt.db
+backend/uploads/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+test-results/
+playwright-report/

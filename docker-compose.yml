@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      PORT: "8080"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL wajib diisi}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET wajib diisi}
+      CBT_ADMIN_USERNAME: ${CBT_ADMIN_USERNAME:-admin}
+      CBT_ADMIN_PASSWORD: ${CBT_ADMIN_PASSWORD:?CBT_ADMIN_PASSWORD wajib diisi}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL wajib diisi}
+      LMS_BASE_URL: ${LMS_BASE_URL:?LMS_BASE_URL wajib diisi}
+      LMS_INTEGRATION_KEY_ID: ${LMS_INTEGRATION_KEY_ID:?LMS_INTEGRATION_KEY_ID wajib diisi}
+      LMS_INTEGRATION_HMAC_SECRET: ${LMS_INTEGRATION_HMAC_SECRET:?LMS_INTEGRATION_HMAC_SECRET wajib diisi}
+      LMS_SYNC_INTERVAL: ${LMS_SYNC_INTERVAL:-5m}
+      UPLOADS_DIR: /app/uploads
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-16}
+    volumes:
+      - uploadsdata:/app/uploads
+    ports:
+      - "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cbt}
+      POSTGRES_USER: ${POSTGRES_USER:-cbt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbt}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  pgdata:
+  uploadsdata:
+
