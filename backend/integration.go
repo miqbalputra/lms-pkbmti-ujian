@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type lmsAccount struct {
@@ -186,6 +187,7 @@ func (s *Server) syncMaster() error {
 func (s *Server) runWorkers() {
 	ticker := time.NewTicker(s.cfg.SyncInterval)
 	defer ticker.Stop()
+	go s.runDeadlineWorker()
 	_ = s.syncMaster()
 	_ = s.flushOutbox()
 	for range ticker.C {
@@ -196,6 +198,47 @@ func (s *Server) runWorkers() {
 			logError("outbox delivery failed: %v", err)
 		}
 	}
+}
+
+func (s *Server) runDeadlineWorker() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := s.closeExpiredAttempts(); err != nil {
+			logError("expired attempt close failed: %v", err)
+		}
+		<-ticker.C
+	}
+}
+
+func (s *Server) closeExpiredAttempts() error {
+	now := time.Now()
+	var candidates []Attempt
+	if err := s.db.Where("status = ? AND deadline_at IS NOT NULL AND deadline_at <= ?", "started", now).Limit(200).Find(&candidates).Error; err != nil {
+		return err
+	}
+	for _, candidate := range candidates {
+		closed := false
+		err := s.db.Transaction(func(tx *gorm.DB) error {
+			var attempt Attempt
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&attempt, "id = ?", candidate.ID).Error; err != nil {
+				return err
+			}
+			if attempt.Status != "started" || attempt.DeadlineAt == nil || attempt.DeadlineAt.After(time.Now()) {
+				return nil
+			}
+			closed = true
+			return finalizeAttemptTx(tx, &attempt, *attempt.DeadlineAt)
+		})
+		if err != nil {
+			return err
+		}
+		if closed {
+			_ = s.enqueueAttemptResult(candidate.ID)
+			s.audit("system", "auto_submit_attempt", candidate.ID)
+		}
+	}
+	return nil
 }
 func (s *Server) syncStatus(c *fiber.Ctx) error {
 	var states []SyncState

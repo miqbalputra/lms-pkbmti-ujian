@@ -64,35 +64,59 @@ type MasterMapel struct {
 
 type Question struct {
 	Base
-	OwnerID     string     `gorm:"index" json:"ownerId"`
-	Title       string     `json:"title"`
-	Type        string     `gorm:"index" json:"type"`
-	Prompt      string     `gorm:"type:text" json:"prompt"`
-	Description string     `gorm:"type:text" json:"description"`
-	ConfigJSON  string     `gorm:"type:text" json:"configJson"`
-	AnswerJSON  string     `gorm:"type:text" json:"answerJson"`
-	RubricJSON  string     `gorm:"type:text" json:"rubricJson,omitempty"`
-	Points      float64    `json:"points"`
-	Status      string     `gorm:"index" json:"status"`
-	ArchivedAt  *time.Time `json:"archivedAt,omitempty"`
+	OwnerID             string     `gorm:"index" json:"ownerId"`
+	Title               string     `json:"title"`
+	Program             string     `gorm:"index" json:"program,omitempty"`
+	Grade               int        `gorm:"index" json:"grade"`
+	Phase               string     `json:"phase,omitempty"`
+	Mode                string     `gorm:"index" json:"mode,omitempty"`
+	Subject             string     `gorm:"index" json:"subject,omitempty"`
+	Domain              string     `json:"domain,omitempty"`
+	Topic               string     `json:"topic,omitempty"`
+	Competency          string     `json:"competency,omitempty"`
+	CognitiveLevel      string     `json:"cognitiveLevel,omitempty"`
+	Difficulty          string     `json:"difficulty,omitempty"`
+	Tags                string     `gorm:"type:text" json:"tags,omitempty"`
+	Type                string     `gorm:"index" json:"type"`
+	Prompt              string     `gorm:"type:text" json:"prompt"`
+	Description         string     `gorm:"type:text" json:"description"`
+	StimulusJSON        string     `gorm:"type:text" json:"stimulusJson,omitempty"`
+	ConfigJSON          string     `gorm:"type:text" json:"configJson"`
+	AnswerJSON          string     `gorm:"type:text" json:"answerJson"`
+	RubricJSON          string     `gorm:"type:text" json:"rubricJson,omitempty"`
+	InternalExplanation string     `gorm:"type:text" json:"internalExplanation,omitempty"`
+	Points              float64    `json:"points"`
+	Status              string     `gorm:"index" json:"status"`
+	Revision            int        `json:"revision"`
+	ArchivedAt          *time.Time `json:"archivedAt,omitempty"`
 }
 
 type Assessment struct {
 	Base
-	OwnerID        string     `gorm:"index" json:"ownerId"`
-	Kind           string     `gorm:"index" json:"kind"`
-	Title          string     `json:"title"`
-	Description    string     `gorm:"type:text" json:"description"`
-	ClassID        string     `gorm:"index" json:"classId"`
-	SubjectID      string     `gorm:"index" json:"subjectId"`
-	Status         string     `gorm:"index" json:"status"`
-	AccessCodeHash string     `json:"-"`
-	DurationMinute int        `json:"durationMinute"`
-	StartsAt       *time.Time `json:"startsAt,omitempty"`
-	EndsAt         *time.Time `json:"endsAt,omitempty"`
-	Randomize      bool       `json:"randomize"`
-	ShowResult     bool       `json:"showResult"`
-	Revision       int        `json:"revision"`
+	OwnerID             string     `gorm:"index" json:"ownerId"`
+	Kind                string     `gorm:"index" json:"kind"`
+	Title               string     `json:"title"`
+	Description         string     `gorm:"type:text" json:"description"`
+	Instructions        string     `gorm:"type:text" json:"instructions,omitempty"`
+	ClassID             string     `gorm:"index" json:"classId"`
+	SubjectID           string     `gorm:"index" json:"subjectId"`
+	Status              string     `gorm:"index" json:"status"`
+	AccessCodeHash      string     `json:"-"`
+	DurationMinute      int        `json:"durationMinute"`
+	StartsAt            *time.Time `json:"startsAt,omitempty"`
+	EndsAt              *time.Time `json:"endsAt,omitempty"`
+	Randomize           bool       `json:"randomize"`
+	ShowResult          bool       `json:"showResult"`
+	MaxAttempts         int        `json:"maxAttempts"`
+	PassScore           float64    `json:"passScore"`
+	ResultsPolicy       string     `json:"resultsPolicy"`
+	ShowReview          bool       `json:"showReview"`
+	RandomizeOptions    bool       `json:"randomizeOptions"`
+	ProgressBar         bool       `json:"progressBar"`
+	ConfirmationMessage string     `gorm:"type:text" json:"confirmationMessage,omitempty"`
+	ThemeJSON           string     `gorm:"type:text" json:"themeJson,omitempty"`
+	SectionsJSON        string     `gorm:"type:text" json:"sectionsJson,omitempty"`
+	Revision            int        `json:"revision"`
 }
 
 type AssessmentItem struct {
@@ -143,6 +167,41 @@ type Answer struct {
 	ManualScore   *float64 `json:"manualScore,omitempty"`
 	Comment       string   `gorm:"type:text" json:"comment,omitempty"`
 	Revision      int      `json:"revision"`
+}
+
+type AttemptAttachment struct {
+	Base
+	AttemptID     string     `gorm:"index" json:"attemptId"`
+	AttemptItemID string     `gorm:"index" json:"attemptItemId"`
+	StudentID     string     `gorm:"index" json:"studentId"`
+	StoredName    string     `gorm:"uniqueIndex;not null" json:"-"`
+	OriginalName  string     `json:"originalName"`
+	ContentType   string     `json:"contentType"`
+	Size          int64      `json:"size"`
+	SHA256        string     `json:"sha256"`
+	DeletedAt     *time.Time `gorm:"index" json:"deletedAt,omitempty"`
+}
+
+type AttemptRecovery struct {
+	Base
+	AttemptID   string     `gorm:"uniqueIndex" json:"attemptId"`
+	StudentID   string     `gorm:"index" json:"studentId"`
+	PayloadJSON string     `gorm:"type:text" json:"payloadJson"`
+	Status      string     `gorm:"index" json:"status"`
+	SubmittedAt time.Time  `json:"submittedAt"`
+	ReviewedAt  *time.Time `json:"reviewedAt,omitempty"`
+	ReviewedBy  string     `json:"reviewedBy,omitempty"`
+	Comment     string     `gorm:"type:text" json:"comment,omitempty"`
+}
+
+type AttemptAnswerRevision struct {
+	Base
+	AttemptID     string `gorm:"index" json:"attemptId"`
+	AttemptItemID string `gorm:"index" json:"attemptItemId"`
+	ActorID       string `json:"actorId"`
+	Source        string `json:"source"`
+	Revision      int    `json:"revision"`
+	ValueJSON     string `gorm:"type:text" json:"valueJson"`
 }
 
 type AuditLog struct {
