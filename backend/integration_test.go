@@ -4,12 +4,16 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"gorm.io/gorm/schema"
 )
 
 func TestMasterSyncRetriesTransientFailureThreeTimes(t *testing.T) {
@@ -42,6 +46,46 @@ func TestMasterSyncRetriesTransientFailureThreeTimes(t *testing.T) {
 	}
 	if len(payload.Kelas) != 2 || payload.Cursor == "" {
 		t.Fatalf("successful response was not decoded: %+v", payload)
+	}
+}
+
+func TestManualMasterSyncRequestsFullFeedAndAutomaticSyncKeepsCursor(t *testing.T) {
+	const cursor = "2026-10-01T09:30:00Z"
+	if got := masterSyncCursor(cursor, true); got != "" {
+		t.Fatalf("manual reconciliation must bypass a potentially stale cursor, got %q", got)
+	}
+	if got := masterSyncCursor(cursor, false); got != cursor {
+		t.Fatalf("automatic sync must retain its incremental cursor, got %q", got)
+	}
+	if got := masterFeedPath(masterSyncCursor(cursor, true)); got != "/api/integrations/cbt/v1/master" {
+		t.Fatalf("full feed path = %q", got)
+	}
+}
+
+func TestMasterPayloadDecodesCanonicalLMSJSONFields(t *testing.T) {
+	data := []byte(`{"cursor":"2026-10-03T00:00:00Z","kelas":[{"id":"class-1","nama":"Paket A Kelas 1","jenjang":1,"active":true,"updatedAt":"2026-10-03T00:00:00Z"}],"pesertaDidik":[{"id":"student-1","nama":"Siswa Satu","nisn":"1234567890","kelasId":"class-1","active":true,"updatedAt":"2026-10-03T00:00:00Z"}]}`)
+	var payload masterPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Kelas) != 1 || payload.Kelas[0].ID != "class-1" || payload.Kelas[0].Nama != "Paket A Kelas 1" || !payload.Kelas[0].Active {
+		t.Fatalf("LMS class record was not decoded: %+v", payload.Kelas)
+	}
+	if len(payload.PesertaDidik) != 1 || payload.PesertaDidik[0].ID != "student-1" || payload.PesertaDidik[0].KelasID != "class-1" || payload.PesertaDidik[0].NISN != "1234567890" || !payload.PesertaDidik[0].Active {
+		t.Fatalf("LMS student record was not decoded: %+v", payload.PesertaDidik)
+	}
+}
+
+func TestMasterStudentNISNIndexAllowsSharedLMSPlaceholders(t *testing.T) {
+	parsed, err := schema.Parse(&MasterPeserta{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIndex := (schema.NamingStrategy{}).IndexName(parsed.Table, "NISN")
+	for _, index := range parsed.ParseIndexes() {
+		if index.Name == wantIndex && strings.EqualFold(index.Class, "UNIQUE") {
+			t.Fatalf("master student NISN index %q must be non-unique; LMS shares temporary NISNs", index.Name)
+		}
 	}
 }
 

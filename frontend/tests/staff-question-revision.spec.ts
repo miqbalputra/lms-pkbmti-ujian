@@ -40,6 +40,6 @@ test('soal terbit dibuat revisinya sebagai draf tanpa mengubah sumber', async ({
   await page.getByLabel('Pertanyaan').fill('Pertanyaan baru khusus untuk paket mendatang.')
   await page.getByRole('button', { name: 'Simpan perubahan' }).click()
   await expect(page.getByText('Perubahan soal tersimpan.')).toBeVisible()
-  await expect(page.getByText('Pertanyaan asli yang sudah dipakai.')).toBeVisible()
-  await expect(page.getByText('Pertanyaan baru khusus untuk paket mendatang.')).toBeVisible()
+  await expect(page.getByText('Pertanyaan asli yang sudah dipakai.', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Pertanyaan baru khusus untuk paket mendatang.', { exact: true }).first()).toBeVisible()
 })

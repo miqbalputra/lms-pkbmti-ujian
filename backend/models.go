@@ -43,8 +43,10 @@ type MasterKelas struct {
 }
 type MasterPeserta struct {
 	Base
-	Nama            string `json:"nama"`
-	NISN            string `gorm:"uniqueIndex" json:"nisn"`
+	Nama string `json:"nama"`
+	// NISN is a source identifier, not a guaranteed unique key. LMS permits
+	// repeated temporary/placeholder values while official NISNs are pending.
+	NISN            string `gorm:"index" json:"nisn"`
 	KelasID         string `gorm:"index" json:"kelasId"`
 	Active          bool   `gorm:"index;default:true" json:"active"`
 	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`

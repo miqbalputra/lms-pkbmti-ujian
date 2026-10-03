@@ -20,30 +20,42 @@ import (
 )
 
 type lmsAccount struct {
-	ID, Username, Nama, Role, TutorID, PesertaDidikID string
-	Active                                            bool
-	UpdatedAt                                         time.Time
+	ID             string    `json:"id"`
+	Username       string    `json:"username"`
+	Nama           string    `json:"nama"`
+	Role           string    `json:"role"`
+	TutorID        string    `json:"tutorId"`
+	PesertaDidikID string    `json:"pesertaDidikId"`
+	Active         bool      `json:"active"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 type lmsKelas struct {
-	ID, Nama  string
-	Jenjang   int
-	Active    bool
-	UpdatedAt time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	Jenjang   int       `json:"jenjang"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type lmsPeserta struct {
-	ID, Nama, NISN, KelasID string
-	Active                  bool
-	UpdatedAt               time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	NISN      string    `json:"nisn"`
+	KelasID   string    `json:"kelasId"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type lmsTutor struct {
-	ID, Nama  string
-	Active    bool
-	UpdatedAt time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type lmsMapel struct {
-	ID, Nama, Kode string
-	Active         bool
-	UpdatedAt      time.Time
+	ID        string    `json:"id"`
+	Nama      string    `json:"nama"`
+	Kode      string    `json:"kode"`
+	Active    bool      `json:"active"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 type masterPayload struct {
 	Cursor       string       `json:"cursor"`
@@ -155,14 +167,26 @@ func syncErrorMessage(err error) string {
 	}
 }
 
+func masterFeedPath(cursor string) string {
+	path := "/api/integrations/cbt/v1/master"
+	if strings.TrimSpace(cursor) != "" {
+		path += "?cursor=" + url.QueryEscape(cursor)
+	}
+	return path
+}
+
+func masterSyncCursor(cursor string, fullRefresh bool) string {
+	if fullRefresh {
+		return ""
+	}
+	return cursor
+}
+
 func (s *Server) fetchMasterPayload(cursor string) (masterPayload, error) {
 	var payload masterPayload
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		path := "/api/integrations/cbt/v1/master"
-		if cursor != "" {
-			path += "?cursor=" + url.QueryEscape(cursor)
-		}
+		path := masterFeedPath(cursor)
 		response, err := s.lmsRequest(http.MethodGet, path, nil)
 		if err == nil {
 			err = readJSONResponse(response, &payload)
@@ -182,10 +206,14 @@ func (s *Server) fetchMasterPayload(cursor string) (masterPayload, error) {
 	return payload, nil
 }
 
-func (s *Server) syncMaster() (syncCounts, error) {
+func (s *Server) syncMaster(fullRefresh bool) (syncCounts, error) {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
-	payload, err := s.fetchMasterPayload(syncCursor(s.db))
+	// Manual sync is the recovery path for cursor gaps, initial deployment, and
+	// LMS imports whose source timestamps predate the last CBT cursor. A full
+	// feed only upserts source records, so it never deletes CBT assessment data.
+	cursor := masterSyncCursor(syncCursor(s.db), fullRefresh)
+	payload, err := s.fetchMasterPayload(cursor)
 	if err != nil {
 		return syncCounts{}, err
 	}
@@ -265,7 +293,7 @@ func (s *Server) recordMasterSync(trigger, actor string) (SyncRun, error) {
 	if err := s.db.Create(&run).Error; err != nil {
 		return run, err
 	}
-	counts, syncErr := s.syncMaster()
+	counts, syncErr := s.syncMaster(trigger == "manual")
 	run.Accounts, run.Classes, run.Students, run.Tutors, run.Subjects = counts.Accounts, counts.Classes, counts.Students, counts.Tutors, counts.Subjects
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
@@ -275,7 +303,13 @@ func (s *Server) recordMasterSync(trigger, actor string) (SyncRun, error) {
 		run.ErrorDetails = syncErr.Error()
 	} else {
 		run.Status = "success"
-		run.Message = fmt.Sprintf("Batch sinkronisasi berhasil: %d siswa, %d kelas, %d tutor, %d mapel, %d akun diperbarui.", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts)
+		if trigger == "manual" && counts.Classes == 0 && counts.Students == 0 {
+			run.Message = "Sinkronisasi penuh berhasil, tetapi LMS mengirim 0 kelas dan 0 siswa. Periksa apakah data peserta didik aktif tersedia di LMS dan LMS_BASE_URL mengarah ke aplikasi LMS yang benar."
+		} else if trigger == "manual" {
+			run.Message = fmt.Sprintf("Rekonsiliasi penuh berhasil: %d siswa, %d kelas, %d tutor, %d mapel, %d akun diperiksa dari LMS.", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts)
+		} else {
+			run.Message = fmt.Sprintf("Batch sinkronisasi berhasil: %d siswa, %d kelas, %d tutor, %d mapel, %d akun diperbarui.", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts)
+		}
 	}
 	if err := s.db.Save(&run).Error; err != nil {
 		return run, err

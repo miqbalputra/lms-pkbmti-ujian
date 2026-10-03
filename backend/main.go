@@ -257,6 +257,14 @@ func apiError(c *fiber.Ctx, err error) error {
 	return c.Status(code).JSON(fiber.Map{"error": message})
 }
 func (s *Server) migrate() error {
+	// Older CBT releases enforced a unique index on NISN. The LMS intentionally
+	// shares a temporary placeholder NISN across multiple learners, so remove
+	// that index before AutoMigrate recreates the field as a normal lookup index.
+	if s.db.Migrator().HasIndex(&MasterPeserta{}, "NISN") {
+		if err := s.db.Migrator().DropIndex(&MasterPeserta{}, "NISN"); err != nil {
+			return fmt.Errorf("remove obsolete unique index on master student NISN: %w", err)
+		}
+	}
 	return s.db.AutoMigrate(&CBTAccount{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
 }
 func (s *Server) ensureAdmin() error {
