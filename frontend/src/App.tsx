@@ -1,12 +1,18 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
 import { Activity, Archive, ArrowDown, ArrowUp, BarChart3, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Cloud, Copy, Download, GraduationCap, GripVertical, LayoutDashboard, LogOut, Pencil, Play, Plus, Send, Settings2, ShieldCheck, Trash2, type LucideIcon } from 'lucide-react'
 import { api, loadSession, saveSession, type Session } from './api'
-import { QuestionEditor, type QuestionFolder } from './QuestionEditor'
+import type { QuestionFolder } from './QuestionEditor'
 import { questionTypes } from './questionTypes'
 import { QuestionAnswerControl, StimulusContent, type AnswerFile, type StudentQuestion } from './QuestionAnswerControl'
-import { StudentPortal } from './StudentPortal'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { QuestionPackages } from './QuestionPackages'
+
+const QuestionEditor = lazy(() => import('./QuestionEditor').then((module) => ({ default: module.QuestionEditor })))
+const StudentPortal = lazy(() => import('./StudentPortal').then((module) => ({ default: module.StudentPortal })))
+const QuestionPackages = lazy(() => import('./QuestionPackages').then((module) => ({ default: module.QuestionPackages })))
+
+function ScreenLoading({ label }: { label: string }) {
+  return <div role="status" className="grid min-h-48 place-items-center rounded-2xl border bg-white p-6 text-center text-slate-600"><span>{label}</span></div>
+}
 
 type Question = { id: string; revision?: number; folderId?: string; usedCount?: number; updatedAt?: string; title: string; type: string; prompt: string; description: string; configJson: string; answerJson?: string; rubricJson?: string; stimulusJson?: string; points: number; status: string; templatePlaceholder?: boolean; grade?: number; program?: string; phase?: string; mode?: string; subject?: string; domain?: string; topic?: string; competency?: string; cognitiveLevel?: string; difficulty?: string; estimatedMinutes?: number; curriculum?: string; tags?: string; internalExplanation?: string }
 function questionFolderLabel(folder: QuestionFolder, folders: QuestionFolder[]) {
@@ -72,7 +78,7 @@ export function App() {
   const setTab = (next: string) => navigate(routePath(next))
   const logout = () => { saveSession(null); setSession(null); navigate('/', { replace: true }) }
   if (!session) return <Login onLogin={(next) => { saveSession(next); setSession(next) }} />
-  if (session.user.role === 'siswa') return <StudentPortal session={session} onLogout={logout} />
+  if (session.user.role === 'siswa') return <Suspense fallback={<main className="min-h-screen bg-slate-50 p-4"><ScreenLoading label="Menyiapkan ruang asesmen…"/></main>}><StudentPortal session={session} onLogout={logout} /></Suspense>
   const nav: Array<[string, LucideIcon, string]> = [['dashboard', LayoutDashboard, 'Ringkasan'], ['questions', BookOpen, 'Bank Soal'], ['assessments', ClipboardList, 'Ujian & Simulasi'], ['schedule', CalendarDays, 'Jadwal'], ['monitor', Activity, 'Monitor live'], ['results', BarChart3, 'Hasil'], ['sync', Cloud, 'Sinkronisasi']]
   const navGroups = [
     { title: 'MULAI', ids: ['dashboard', 'assessments', 'questions'] },
@@ -88,7 +94,7 @@ export function App() {
           {nav.filter(([id]) => group.ids.includes(id)).map(([id, Icon, label]) => <button key={id} type="button" aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)} className={`flex min-h-11 shrink-0 items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold ${tab === id ? 'bg-brand text-white' : 'text-slate-600 hover:bg-white'}`}><Icon className="size-4"/>{label}</button>)}
         </div>)}
       </nav>
-      <main className="min-w-0 space-y-4"><NoticeBox notice={notice}/>{tab === 'dashboard' && <Dashboard session={session} onNavigate={setTab}/>} {tab === 'questions' && (questionLibrary ? <QuestionLibrary session={session} notify={setNotice}/> : <QuestionPackages session={session} notify={setNotice}/>)} {tab === 'assessments' && <AssessmentBuilder session={session} notify={setNotice} onSync={() => setTab('sync')}/>} {tab === 'schedule' && <SchedulePanel session={session}/>} {tab === 'monitor' && <LiveMonitor session={session}/>} {tab === 'results' && <Results session={session}/>} {tab === 'sync' && <SyncPanel session={session} notify={setNotice}/>}</main>
+      <main className="min-w-0 space-y-4"><NoticeBox notice={notice}/><Suspense fallback={<ScreenLoading label="Menyiapkan ruang kerja…"/>}>{tab === 'dashboard' && <Dashboard session={session} onNavigate={setTab}/>} {tab === 'questions' && (questionLibrary ? <QuestionLibrary session={session} notify={setNotice}/> : <QuestionPackages session={session} notify={setNotice}/>)} {tab === 'assessments' && <AssessmentBuilder session={session} notify={setNotice} onSync={() => setTab('sync')}/>} {tab === 'schedule' && <SchedulePanel session={session}/>} {tab === 'monitor' && <LiveMonitor session={session}/>} {tab === 'results' && <Results session={session}/>} {tab === 'sync' && <SyncPanel session={session} notify={setNotice}/>}</Suspense></main>
     </div>
   </div>
 }
@@ -540,7 +546,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
       const row = result.assessment
       if (row.status !== 'draft') return
       if (row.accessCodeConfigured && !row.accessCode && row.kind === 'ujian_online' && showError) notify({ kind: 'error', text: 'Draf lama menyimpan kode akses dalam bentuk hash sehingga nilainya tidak bisa ditampilkan kembali. Masukkan kode baru sebelum menerbitkan.' })
-      const serverForm: DraftForm = { ...blankForm(), kind: row.kind, title: row.title === 'Paket tanpa judul' ? '' : row.title, description: row.description || '', instructions: row.instructions || '', classId: row.classId || '', room: row.room || '', subjectId: row.subjectId || '', accessCode: row.accessCode || '', durationMinute: row.durationMinute || 60, startsAt: localDateInput(row.startsAt), endsAt: localDateInput(row.endsAt), randomize: row.randomize, randomizeOptions: row.randomizeOptions || false, showResult: row.showResult, showReview: row.showReview || false, maxAttempts: row.maxAttempts || 1, passScore: row.passScore || 0, resultsPolicy: row.resultsPolicy || 'after_review', progressBar: true, confirmationMessage: '' }
+      const serverForm: DraftForm = { ...blankForm(), kind: row.kind || 'ujian_online', title: row.title === 'Paket tanpa judul' ? '' : row.title || '', description: row.description || '', instructions: row.instructions || '', classId: row.classId || '', room: row.room || '', subjectId: row.subjectId || '', accessCode: row.accessCode || '', durationMinute: row.durationMinute || 60, startsAt: localDateInput(row.startsAt), endsAt: localDateInput(row.endsAt), randomize: Boolean(row.randomize), randomizeOptions: Boolean(row.randomizeOptions), showResult: Boolean(row.showResult), showReview: Boolean(row.showReview), maxAttempts: row.maxAttempts || 1, passScore: row.passScore || 0, resultsPolicy: row.resultsPolicy || 'after_review', progressBar: true, confirmationMessage: '' }
       const serverIds = result.items.slice().sort((a, b) => a.position - b.position).map((item) => item.questionId)
       const serverAssignments = result.assignments.map((item) => item.studentId)
       let next = serverForm

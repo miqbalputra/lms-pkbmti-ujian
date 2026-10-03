@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 
 test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan penugasan langsung', async ({ page }) => {
+  const reactInputWarnings: string[] = []
+  page.on('console', (message) => { if (message.type() === 'error' && /controlled input to be uncontrolled/.test(message.text())) reactInputWarnings.push(message.text()) })
   const questionRows: Array<{ id: string; title: string; type: string; prompt: string; description: string; configJson: string; points: number; status: string; subject: string; revision: number; packageId?: string; packagePosition?: number }> = [
     { id: 'question-1', title: 'Operasi pecahan', type: 'pg_tunggal', prompt: 'Hitung 1/2 + 1/4', description: '', configJson: JSON.stringify({ choices: [{ id: 'a', text: 'Pilihan A' }, { id: 'b', text: 'Pilihan B' }] }), points: 2, status: 'draft', subject: 'Matematika', revision: 1 },
     { id: 'question-2', title: 'Panjang sisi', type: 'isian_singkat', prompt: 'Berapa cm?', description: '', configJson: '{}', points: 1, status: 'draft', subject: 'Matematika', revision: 1 },
@@ -64,6 +66,11 @@ test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan 
 
   await expect(page.getByRole('heading', { name: 'Paket Soal' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Paket Matematika' })).toBeVisible()
+  for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(viewport)
+    const metrics = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }))
+    expect(metrics.scrollWidth, `package list overflows at ${viewport.width}px`).toBeLessThanOrEqual(metrics.width)
+  }
   expect(listQuery).toContain('tab=published')
   const parsedQuery = new URLSearchParams(listQuery)
   expect(parsedQuery.get('classId')).toBe('class-10')
@@ -72,6 +79,11 @@ test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan 
 
   await page.getByRole('link', { name: 'Paket Matematika' }).click()
   await expect(page).toHaveURL(/\/soal\/paket\/package-1$/)
+  for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(viewport)
+    const metrics = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }))
+    expect(metrics.scrollWidth, `package detail overflows at ${viewport.width}px`).toBeLessThanOrEqual(metrics.width)
+  }
   await page.getByRole('link', { name: 'Edit' }).click()
   await expect(page).toHaveURL(/\/soal\/paket\/package-1\/edit$/)
   await page.getByRole('button', { name: /Operasi pecahan/ }).click()
@@ -116,6 +128,7 @@ test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan 
   expect(localDrafts.active).toBe('assessment-from-package')
   expect(localDrafts.previous).toContain('Draf lama belum sinkron')
   expect(localDrafts.legacy).toBeNull()
+  expect(reactInputWarnings, 'draft restoration must keep every form field controlled').toEqual([])
 
   await page.goto('/soal?tab=all')
   await page.getByRole('button', { name: 'Buat paket soal' }).click()

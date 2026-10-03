@@ -62,7 +62,8 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
   await page.getByRole('radio', { name: /08\.00/ }).check()
   await savedRequest
   await page.getByRole('button', { name: 'Ragu-ragu' }).click()
-  await page.getByRole('button', { name: 'Periksa & kirim' }).click()
+  await page.getByRole('button', { name: /Daftar soal/ }).click()
+  await page.getByRole('dialog').getByRole('button', { name: 'Periksa & kirim' }).click()
   await expect(page.getByRole('dialog').getByText('Ditandai', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Konfirmasi & kirim' }).click()
 
@@ -165,5 +166,61 @@ test('portal siswa tidak melebar horizontal pada ponsel, tablet, dan desktop', a
     await expect(page.getByRole('heading', { name: 'Asesmen untukmu' })).toBeVisible()
     const dimensions = await page.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width)
+  }
+})
+
+test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijangkau di semua ukuran layar', async ({ page }) => {
+  const deadlineAt = new Date(Date.now() + 45 * 60 * 1000).toISOString()
+  const items = Array.from({ length: 8 }, (_, index) => ({
+    id: `item-${index + 1}`, position: index + 1, flagged: index === 2, answer: null, revision: 0,
+    question: { id: `question-${index + 1}`, title: `Pertanyaan ${index + 1}`, type: 'pg_tunggal', prompt: `Soal uji responsif ${index + 1}?`, points: 1, config: { choices: [{ id: 'a', text: 'Jawaban A' }, { id: 'b', text: 'Jawaban B' }] } },
+  }))
+  await page.route('**/api/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname.replace('/api', '')
+    const method = request.method()
+    const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
+    if (path === '/public/ujian-online/cek' && method === 'POST') return json({ accessToken: 'responsive-attempt', student: { id: 'student-responsive', nama: 'Siswa Responsif' } })
+    if (path === '/student/assessments' && method === 'GET') return json([{ id: 'assessment-responsive', kind: 'simulasi', title: 'Simulasi Responsif', durationMinute: 45 }])
+    if (path === '/student/attempts' && method === 'GET') return json([])
+    if (path === '/student/assessments/assessment-responsive/start' && method === 'POST') return json({ id: 'attempt-responsive', assessmentId: 'assessment-responsive', status: 'started', deadlineAt })
+    if (path === '/student/attempts/attempt-responsive' && method === 'GET') return json({ attempt: { id: 'attempt-responsive', assessmentId: 'assessment-responsive', status: 'started', deadlineAt }, serverTime: new Date().toISOString(), items })
+    return json({ error: `Unmocked request: ${method} ${path}` }, 500)
+  })
+
+  await page.goto('/')
+  await page.getByLabel('NISN').fill('0000000003')
+  await page.getByLabel('Kode akses ujian').fill('123456')
+  await page.getByRole('button', { name: 'Lihat ujian' }).click()
+  await page.getByRole('button', { name: 'Baca instruksi' }).click()
+  await page.getByRole('button', { name: 'Saya siap, mulai' }).click()
+  await expect(page.getByText('Soal uji responsif 1?')).toBeVisible()
+
+  for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(viewport)
+    const metrics = await page.evaluate(() => {
+      const nav = document.querySelector<HTMLElement>('nav[aria-label="Navigasi pengerjaan"]')
+      const buttons = [...(nav?.querySelectorAll<HTMLElement>('button') || [])]
+      return {
+        width: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        navVisible: Boolean(nav && getComputedStyle(nav).display !== 'none'),
+        targetsAtLeast44: buttons.every((button) => button.getBoundingClientRect().height >= 44 && button.getBoundingClientRect().width >= 44),
+      }
+    })
+    expect(metrics.scrollWidth, `horizontal overflow at ${viewport.width}px`).toBeLessThanOrEqual(metrics.width)
+    if (viewport.width < 1024) {
+      expect(metrics.navVisible).toBe(true)
+      expect(metrics.targetsAtLeast44).toBe(true)
+      await page.getByRole('button', { name: /Daftar soal/ }).click()
+      const palette = page.getByRole('dialog', { name: 'Daftar soal' })
+      await expect(palette.getByRole('button', { name: 'Soal 8, belum dijawab' })).toBeVisible()
+      await palette.getByRole('button', { name: 'Soal 8, belum dijawab' }).click()
+      await expect(page.getByText('Soal uji responsif 8?')).toBeVisible()
+    } else {
+      expect(metrics.navVisible).toBe(false)
+      await page.getByRole('complementary').getByRole('button', { name: 'Soal 8, belum dijawab' }).click()
+      await expect(page.getByText('Soal uji responsif 8?')).toBeVisible()
+    }
   }
 })
