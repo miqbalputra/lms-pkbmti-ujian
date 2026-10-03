@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan penugasan langsung', async ({ page }) => {
   const questionRows: Array<{ id: string; title: string; type: string; prompt: string; description: string; configJson: string; points: number; status: string; subject: string; revision: number; packageId?: string; packagePosition?: number }> = [
-    { id: 'question-1', title: 'Operasi pecahan', type: 'pg_tunggal', prompt: 'Hitung 1/2 + 1/4', description: '', configJson: '{}', points: 2, status: 'draft', subject: 'Matematika', revision: 1 },
+    { id: 'question-1', title: 'Operasi pecahan', type: 'pg_tunggal', prompt: 'Hitung 1/2 + 1/4', description: '', configJson: JSON.stringify({ choices: [{ id: 'a', text: 'Pilihan A' }, { id: 'b', text: 'Pilihan B' }] }), points: 2, status: 'draft', subject: 'Matematika', revision: 1 },
     { id: 'question-2', title: 'Panjang sisi', type: 'isian_singkat', prompt: 'Berapa cm?', description: '', configJson: '{}', points: 1, status: 'draft', subject: 'Matematika', revision: 1 },
   ]
   let questions = questionRows.map((row) => ({ ...row }))
@@ -13,7 +13,7 @@ test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan 
   const detail = () => ({ ...packageRow, questions: questions.filter((row) => row.packageId === packageRow.id).sort((a, b) => (a.packagePosition || 0) - (b.packagePosition || 0)), assignments })
   const summary = () => ({ ...packageRow, questionCount: questions.filter((row) => row.packageId === packageRow.id).length, assignmentCount: assignments.length, classIds: assignments.filter((row) => row.targetType === 'class').map((row) => row.targetId), studentIds: assignments.filter((row) => row.targetType === 'student').map((row) => row.targetId) })
 
-  await page.route('**/api/**', async (route) => {
+  await page.context().route('**/api/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     const path = url.pathname.replace('/api', '')
@@ -27,6 +27,10 @@ test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan 
       draftPayload = request.postDataJSON() as Record<string, unknown>
       const body = draftPayload as { title: string; kind: string; classId: string }
       return json({ assessment: { id: 'assessment-from-package', title: body.title, kind: body.kind, classId: body.classId, status: 'draft', revision: 1, durationMinute: 60 } }, 201)
+    }
+    if (path === '/staff/assessments/assessment-from-package' && method === 'GET') {
+      const payload = draftPayload as { title: string; kind: string; classId: string }
+      return json({ assessment: { id: 'assessment-from-package', title: payload.title, kind: payload.kind, classId: payload.classId, status: 'draft', revision: 1, durationMinute: 60 }, items: [{ questionId: 'question-1', position: 1 }, { questionId: 'question-2', position: 2 }], assignments: [] })
     }
     if (path === '/staff/question-packages' && method === 'GET') { listQuery = url.search; return json([summary()]) }
     if (path === '/staff/question-packages' && method === 'POST') {
@@ -85,11 +89,33 @@ test('paket soal menyimpan butir dan target serta membuka URL detail, edit, dan 
   await expect(page.getByText('Kelas 10-A')).toBeVisible()
   await expect(page.getByText('2 butir')).toBeVisible()
 
+  const previewTabPromise = page.waitForEvent('popup')
+  await page.getByRole('button', { name: 'Pratinjau di tab baru' }).first().click()
+  const previewTab = await previewTabPromise
+  await expect(previewTab).toHaveURL(/\/soal\/paket\/package-1\/preview\/question-1$/)
+  await expect(previewTab.getByText('Pratinjau tampilan siswa')).toBeVisible()
+  await expect(previewTab.getByText('Pilihan A')).toBeVisible()
+  await previewTab.close()
+
+  await page.evaluate(() => {
+    localStorage.setItem('cbt-builder-draft-teacher-1', 'assessment-old')
+    localStorage.setItem('cbt-builder-draft-teacher-1-local', JSON.stringify({ title: 'Draf lama belum sinkron', classId: 'class-10', items: [], studentIds: [] }))
+  })
+
   await page.getByRole('link', { name: 'Buat Ujian Online' }).click()
   await expect(page).toHaveURL(/\/ujian$/)
   await expect(page.getByLabel('Judul asesmen')).toHaveValue('Paket Matematika')
+  await expect(page.locator('body')).not.toContainText('Ada perubahan lokal yang belum tersinkron pada draf sebelumnya')
   expect(((draftPayload?.items || []) as Array<{ questionId: string }>).map((item) => item.questionId)).toEqual(['question-1', 'question-2'])
   expect(draftPayload?.classId).toBe('class-10')
+  const localDrafts = await page.evaluate(() => ({
+    active: localStorage.getItem('cbt-builder-draft-teacher-1'),
+    previous: localStorage.getItem('cbt-builder-draft-teacher-1-local-assessment-old'),
+    legacy: localStorage.getItem('cbt-builder-draft-teacher-1-local'),
+  }))
+  expect(localDrafts.active).toBe('assessment-from-package')
+  expect(localDrafts.previous).toContain('Draf lama belum sinkron')
+  expect(localDrafts.legacy).toBeNull()
 
   await page.goto('/soal?tab=all')
   await page.getByRole('button', { name: 'Buat paket soal' }).click()

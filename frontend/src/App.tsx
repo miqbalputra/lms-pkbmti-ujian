@@ -59,7 +59,7 @@ const kinds = questionTypes
 
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) { return <section className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}>{children}</section> }
 function Button({ children, className = '', variant = 'primary', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'danger' }) { const colors = variant === 'primary' ? 'bg-brand text-white hover:bg-brand-dark' : variant === 'danger' ? 'bg-rose-600 text-white hover:bg-rose-700' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50'; return <button {...props} className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${colors} ${className}`}>{children}</button> }
-function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="grid gap-1.5 text-sm font-semibold text-slate-700"><span>{label}</span>{children}</label> }
+function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="grid min-w-0 gap-1.5 text-sm font-semibold text-slate-700 [&_input]:w-full [&_input]:min-w-0 [&_select]:w-full [&_select]:min-w-0 [&_textarea]:w-full [&_textarea]:min-w-0"><span>{label}</span>{children}</label> }
 function NoticeBox({ notice }: { notice: Notice }) { return notice ? <div role="alert" className={`rounded-xl border p-3 text-sm ${notice.kind === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{notice.text}</div> : null }
 
 export function App() {
@@ -438,6 +438,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
   const drag = useRef<string | null>(null)
   const lastSaved = useRef('')
   const key = `cbt-builder-draft-${session.user.id}`
+  const localDraftKey = (id: string) => `${key}-local-${id}`
   const location = useLocation()
   const navigate = useNavigate()
   const packagePrefillHandled = useRef('')
@@ -451,6 +452,14 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
     status: 'draft', items: ids.map((questionId) => ({ questionId })), studentIds: assignees,
   })
   const serializeDraft = (current: DraftForm, ids: string[], assignees: string[]) => JSON.stringify(formPayload(current, ids, assignees))
+  function preserveLegacyLocalDraft() {
+    const activeDraftID = localStorage.getItem(key)
+    const legacyLocal = localStorage.getItem(`${key}-local`)
+    if (!activeDraftID || !legacyLocal) return
+    const scopedKey = localDraftKey(activeDraftID)
+    if (!localStorage.getItem(scopedKey)) localStorage.setItem(scopedKey, legacyLocal)
+    localStorage.removeItem(`${key}-local`)
+  }
 
   async function loadAll() {
     setLoading(true)
@@ -480,6 +489,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
     const draftStudents = prefill?.studentIds || (copyCurrent && assignmentScope === 'selected' ? studentIds : [])
     try {
       const result = await api<{ assessment: Assessment }>('/staff/assessments/drafts', { method: 'POST', body: JSON.stringify(formPayload(draftForm, draftItems, draftStudents)) }, session)
+      preserveLegacyLocalDraft()
       setForm(draftForm); setSelected(draftItems); setStudentIds(draftStudents); setAssignmentScope(prefill?.assignmentScope || (copyCurrent ? assignmentScope : 'class')); setMode(nextMode); setDraftId(result.assessment.id); setRevision(result.assessment.revision); setConflict(null); setSaveState('saved')
       localStorage.setItem(key, result.assessment.id)
       lastSaved.current = serializeDraft(draftForm, draftItems, draftStudents)
@@ -491,11 +501,6 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
   useEffect(() => {
     if (!packagePrefillID || loading || draftId || packagePrefillHandled.current === packagePrefillID) return
     packagePrefillHandled.current = packagePrefillID
-    if (localStorage.getItem(`${key}-local`)) {
-      notify({ kind: 'error', text: 'Ada perubahan lokal yang belum tersinkron pada draf sebelumnya. Buka dan simpan draf itu terlebih dahulu agar tidak tertimpa.' })
-      navigate('/ujian', { replace: true })
-      return
-    }
     void (async () => {
       try {
         const source = await api<{ id: string; title: string; description?: string; subject?: string; status: string; questions: Question[]; assignments: Array<{ targetType: 'class' | 'student'; targetId: string }> }>(`/staff/question-packages/${encodeURIComponent(packagePrefillID)}`, {}, session)
@@ -543,15 +548,18 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
       let assignments = serverAssignments
       let recoveredLocal = false
       try {
-        const rawLocal = localStorage.getItem(`${key}-local`)
+        const scopedLocalKey = localDraftKey(id)
+        const rawLocal = localStorage.getItem(scopedLocalKey) || (localStorage.getItem(key) === id ? localStorage.getItem(`${key}-local`) : null)
         if (rawLocal) {
           const local = JSON.parse(rawLocal) as Record<string, unknown>
           next = { ...serverForm, ...local, startsAt: localDateInput(typeof local.startsAt === 'string' ? local.startsAt : undefined), endsAt: localDateInput(typeof local.endsAt === 'string' ? local.endsAt : undefined) } as DraftForm
           if (Array.isArray(local.items)) ids = local.items.map((entry) => typeof entry === 'object' && entry && 'questionId' in entry ? String((entry as { questionId: unknown }).questionId) : '').filter(Boolean)
           if (Array.isArray(local.studentIds)) assignments = local.studentIds.map(String)
           recoveredLocal = true
+          localStorage.setItem(scopedLocalKey, rawLocal)
+          if (localStorage.getItem(key) === id) localStorage.removeItem(`${key}-local`)
         }
-      } catch { localStorage.removeItem(`${key}-local`) }
+      } catch { localStorage.removeItem(localDraftKey(id)); if (localStorage.getItem(key) === id) localStorage.removeItem(`${key}-local`) }
       setAssignmentScope(assignments.length ? 'selected' : 'class'); setStudentIds(assignments)
       setForm(next); setSelected(ids); setDraftId(row.id); setRevision(row.revision); setMode((localStorage.getItem(`${key}-mode`) as BuilderMode) || 'simple'); setConflict(null); setSaveState(recoveredLocal ? navigator.onLine ? 'saving' : 'offline' : 'saved'); localStorage.setItem(key, row.id)
       lastSaved.current = serializeDraft(serverForm, serverIds, serverAssignments)
@@ -566,7 +574,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
     if (!draftId || conflict) return false
     const currentStudents = assignmentScope === 'class' ? [] : studentIds
     const serialized = serializeDraft(form, selected, currentStudents)
-    localStorage.setItem(`${key}-local`, serialized)
+    localStorage.setItem(localDraftKey(draftId), serialized)
     if (serialized === lastSaved.current) return true
     if (scheduleInvalid) { setSaveState('error'); return false }
     if (!navigator.onLine) { setSaveState('offline'); return false }
@@ -577,7 +585,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
       if (response.status === 409) { setConflict(payload.server as Assessment); setSaveState('conflict'); return false }
       if (!response.ok) throw new Error(payload.error || 'Draf gagal disimpan')
       const saved = payload.assessment as Assessment
-      setRevision(saved.revision); lastSaved.current = serialized; localStorage.removeItem(`${key}-local`); setSaveState('saved')
+      setRevision(saved.revision); lastSaved.current = serialized; localStorage.removeItem(localDraftKey(draftId)); if (localStorage.getItem(key) === draftId) localStorage.removeItem(`${key}-local`); setSaveState('saved')
       return true
     } catch { setSaveState('error'); return false }
   }
@@ -655,7 +663,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
   async function createFromTemplate(templateID: string) {
     try {
       const result = await api<{ assessment: Assessment; questionCount: number }>(`/staff/assessment-templates/${templateID}/draft`, { method: 'POST', body: JSON.stringify({}) }, session)
-      localStorage.removeItem(`${key}-local`)
+      preserveLegacyLocalDraft()
       await loadAll()
       await resumeDraft(result.assessment.id, false)
       notify({ kind: 'ok', text: `${result.assessment.title} siap diatur dengan ${result.questionCount} soal contoh. Lengkapi isi dan kunci sebelum diterbitkan.` })
@@ -667,7 +675,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
     setDuplicateBusy(row.id)
     try {
       const result = await api<{ assessment: Assessment }>(`/staff/assessments/${row.id}/duplicate`, { method: 'POST' }, session)
-      localStorage.removeItem(`${key}-local`)
+      preserveLegacyLocalDraft()
       await loadAll()
       await resumeDraft(result.assessment.id, false)
       notify({ kind: 'ok', text: `Salinan draf “${result.assessment.title}” dibuat. Kelas, jadwal, kode akses, dan peserta perlu dipilih kembali.` })
@@ -691,7 +699,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
     try {
       if (!await autosave()) throw new Error('Perubahan belum tersimpan. Coba lagi setelah koneksi pulih dan status draf menunjukkan Tersimpan.')
       await api(`/staff/assessments/${draftId}/publish`, { method: 'POST' }, session)
-      localStorage.removeItem(key); localStorage.removeItem(`${key}-local`); setDraftId(''); setConflict(null); setSaveState('idle'); notify({ kind: 'ok', text: 'Asesmen diterbitkan. Snapshot soal dan pengaturan telah dibekukan.' }); await loadAll()
+      if (localStorage.getItem(key) === draftId) { localStorage.removeItem(key); localStorage.removeItem(`${key}-local`) }; localStorage.removeItem(localDraftKey(draftId)); setDraftId(''); setConflict(null); setSaveState('idle'); notify({ kind: 'ok', text: 'Asesmen diterbitkan. Snapshot soal dan pengaturan telah dibekukan.' }); await loadAll()
     } catch (error) { notify({ kind: 'error', text: error instanceof Error ? error.message : 'Asesmen belum dapat diterbitkan' }) }
     finally { setPublishBusy(false) }
   }
@@ -720,7 +728,7 @@ function AssessmentBuilder({ session, notify, onSync }: { session: Session; noti
     <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white/95 p-3 shadow-sm backdrop-blur"><div className="flex min-w-0 items-center gap-2"><Button type="button" variant="secondary" onClick={() => { setDraftId(''); setConflict(null); setSaveState('idle'); void loadAll() }}>← Kembali</Button><div className="min-w-0"><p className="truncate font-bold">{form.title || 'Paket tanpa judul'}</p><p aria-live="polite" className={`text-xs ${saveState === 'error' || saveState === 'conflict' ? 'text-rose-700' : saveState === 'offline' ? 'text-amber-700' : 'text-slate-500'}`}>{saveState === 'saving' ? 'Menyimpan…' : saveState === 'saved' ? 'Tersimpan otomatis' : saveState === 'offline' ? 'Offline — draf tersimpan lokal' : saveState === 'error' ? 'Gagal menyimpan — coba lagi' : saveState === 'conflict' ? 'Konflik versi draf' : 'Draf baru'}</p></div></div><div className="flex flex-wrap gap-2"><Button type="button" variant="secondary" onClick={() => setParticipantsOpen(true)}>Peserta · {assignmentScope === 'class' ? 'Satu kelas' : `${studentIds.length} siswa`}</Button><Button type="button" variant="secondary" onClick={() => { setPreviewAnswer(null); setPreview(true) }}>Pratinjau siswa</Button><Button type="button" onClick={() => void publish()} disabled={publishBusy || saveState === 'conflict'}><Send className="size-4"/>{publishBusy ? 'Menerbitkan…' : 'Siapkan & terbitkan'}</Button></div></div>
     {conflict && <Card className="border-amber-300 bg-amber-50 p-4"><h3 className="font-bold">Draf ini berubah di sesi lain</h3><p className="mt-1 text-sm">Versi server saat ini: “{conflict.title || 'Paket tanpa judul'}” · revisi {conflict.revision}. Pilih versi yang ingin dilanjutkan.</p><div className="mt-3 flex flex-wrap gap-2"><Button type="button" onClick={() => void loadServerVersion()}>Muat versi server</Button><Button type="button" variant="secondary" onClick={() => void createDraft(mode, true)}>Simpan perubahan sebagai salinan</Button></div></Card>}
     {saveState === 'error' && <Card className="border-rose-200 bg-rose-50 p-3"><p className="text-sm text-rose-800">{scheduleInvalid ? 'Tanggal selesai harus setelah tanggal mulai. Draf lokal aman; perbaiki jadwal untuk menyimpan ke server.' : 'Perubahan tetap berada di perangkat ini. Periksa koneksi lalu coba simpan lagi.'}</p><Button className="mt-2" type="button" variant="secondary" onClick={() => { lastSaved.current = ''; setRetryCount((value) => value + 1) }}>Coba simpan lagi</Button></Card>}
-    <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(220px,0.8fr)_minmax(360px,1.25fr)_minmax(260px,0.9fr)]">
+    <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(210px,0.75fr)_minmax(420px,1.35fr)_minmax(270px,0.9fr)]">
       <Card className="p-4"><div className="flex items-start justify-between gap-2"><div><h3 className="font-bold">Tambah soal</h3><p className="text-xs text-slate-600">Klik soal untuk menambahkannya.</p></div><Button type="button" className="px-3" onClick={() => { setQuestionEditing(null); setQuestionOpen(true) }}><Plus className="size-4"/> Buat</Button></div><div className="mt-3 space-y-2">{questions.map((question) => <button key={question.id} type="button" onClick={() => { if (!selected.includes(question.id)) setSelected((current) => [...current, question.id]) }} disabled={selected.includes(question.id) || question.status === 'archived'} className="min-h-12 w-full rounded-xl border p-3 text-left text-sm hover:border-sky-500 disabled:opacity-50"><b className="block">{question.title}</b><span className="text-slate-500">{kinds.find(([id]) => id === question.type)?.[1] || question.type} · {question.points} poin</span>{question.templatePlaceholder && <span className="mt-1 block text-xs font-semibold text-amber-800">Contoh template · perlu diganti</span>}</button>)}{questions.length === 0 && <p className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Bank Soal masih kosong.</p>}</div></Card>
       <div className="min-w-0 space-y-4"><Card className="min-w-0 p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-bold">Urutan soal</h3><p className="text-sm text-slate-600">Seret kartu atau gunakan tombol naik/turun.</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-sm font-bold">{selected.length} soal</span></div><div className="mt-3 space-y-2">{selected.length === 0 && <div className="rounded-xl border border-dashed p-8 text-center text-sm text-slate-500">Pilih soal di kiri atau buat soal baru.</div>}{selected.map((id, index) => { const question = questions.find((row) => row.id === id); return <div key={id} data-testid="assessment-question-row" draggable onDragStart={() => { drag.current = id }} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (drag.current) order(drag.current, id) }} className="grid min-w-0 grid-cols-[20px_32px_minmax(0,1fr)] items-center gap-x-2 gap-y-2 rounded-xl border bg-white p-3"><GripVertical className="size-5 shrink-0 cursor-grab text-slate-400"/><span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand text-xs font-bold text-white">{index + 1}</span><span className="min-w-0 truncate text-sm font-semibold">{question?.title || 'Soal tidak ditemukan'}{question?.templatePlaceholder && <span className="ml-2 rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-900">Contoh</span>}</span><div className="col-span-3 flex min-w-0 flex-wrap items-center justify-end gap-2 border-t pt-2">{question?.status === 'draft' && <Button type="button" variant="secondary" className="min-h-11 min-w-16 px-2 text-xs" onClick={() => { setQuestionEditing(question); setQuestionOpen(true) }}>Edit soal</Button>}<Button type="button" variant="secondary" className="size-11 shrink-0 px-0" disabled={index === 0} aria-label="Naikkan soal" onClick={() => moveSelected(index, index - 1)}><ArrowUp className="size-4"/></Button><Button type="button" variant="secondary" className="size-11 shrink-0 px-0" disabled={index === selected.length - 1} aria-label="Turunkan soal" onClick={() => moveSelected(index, index + 1)}><ArrowDown className="size-4"/></Button><Button type="button" variant="secondary" className="size-11 shrink-0 px-0 text-slate-700" aria-label="Hapus dari paket" onClick={() => setSelected((current) => current.filter((value) => value !== id))}>×</Button>{question && <Button type="button" variant="danger" className="size-11 shrink-0 px-0" aria-label={`Hapus soal ${question.title} ke Trash`} onClick={() => void trashBuilderQuestion(id)}><Trash2 className="size-4"/></Button>}</div></div>})}</div></Card>
         <Card className="p-4 sm:p-5"><h3 className="font-bold">Identitas paket</h3><div className="mt-3 grid gap-3 sm:grid-cols-2"><Field label="Jenis asesmen"><select className="min-h-11 rounded-xl border bg-white px-3" value={form.kind} onChange={(event) => setField('kind', event.target.value)}><option value="ujian_online">Ujian Online</option><option value="simulasi">Simulasi Asesmen</option></select></Field><Field label="Judul asesmen"><input className="min-h-11 rounded-xl border px-3" value={form.title} onChange={(event) => setField('title', event.target.value)} placeholder="Contoh: Literasi membaca — kelas 6" /></Field><Field label="Kelas peserta"><select className="min-h-11 rounded-xl border bg-white px-3" value={form.classId} onChange={(event) => { const classId = event.target.value; setField('classId', classId); setStudentIds((current) => current.filter((id) => students.some((student) => student.id === id && student.kelasId === classId))) }}><option value="">Pilih kelas</option>{classes.map((row) => <option key={row.id} value={row.id}>{row.nama}{row.manualFallback ? ' · Label sementara' : ` · Paket ${['A', 'B', 'C'][Math.max(0, Math.min(row.jenjang - 1, 2))]}`}</option>)}</select></Field>{classes.length === 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:col-span-2"><p className="font-bold">{classLoadIssue || 'Data kelas belum tersedia dari LMS.'}</p>{students.length > 0 ? <><p className="mt-1">Fallback sementara hanya dapat memberi nama pada kelas yang masih memiliki peserta aktif tersinkron. Label ini akan diperbarui jika feed LMS mengirimkan data resmi untuk kelas tersebut.</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><Field label="Pilih kelompok peserta tersinkron"><select className="min-h-11 rounded-xl border bg-white px-3" value={manualClassID} onChange={(event) => setManualClassID(event.target.value)}><option value="">Pilih kelompok peserta</option>{[...new Set(students.map((student) => student.kelasId).filter(Boolean))].map((classID) => { const members = students.filter((student) => student.kelasId === classID); return <option key={classID} value={classID}>{members.length} peserta · {members.slice(0, 2).map((student) => student.nama).join(', ')}{classID.length > 18 ? ` · …${classID.slice(-8)}` : ` · ${classID}`}</option> })}</select></Field><Field label="Nama kelas (sementara)"><input className="min-h-11 rounded-xl border px-3" value={manualClassName} onChange={(event) => setManualClassName(event.target.value)} placeholder="Contoh: Paket B — Kelas 7" maxLength={100}/></Field></div><Button type="button" variant="secondary" className="mt-3 w-full sm:w-auto" disabled={!manualClassID || !manualClassName.trim() || manualClassBusy || session.user.role === 'kepala_sekolah'} onClick={() => void createManualClass()}>{manualClassBusy ? 'Menyimpan label…' : 'Buat pilihan kelas sementara'}</Button></> : <><p className="mt-1">Belum ada peserta aktif dari LMS, jadi kelas manual tidak dapat dipetakan dengan aman. Sinkronkan LMS dahulu sebelum membuat asesmen.</p>{session.user.role !== 'kepala_sekolah' && <Button type="button" variant="secondary" className="mt-3" onClick={onSync}>Buka sinkronisasi LMS</Button>}</>}</div>}{form.kind === 'ujian_online' && <Field label="Kode akses siswa"><input className="min-h-11 rounded-xl border px-3" value={form.accessCode} onChange={(event) => setField('accessCode', event.target.value)} placeholder="Dibagikan tutor kepada siswa" /></Field>}<Field label="Durasi (menit)"><input className="min-h-11 rounded-xl border px-3" type="number" min="1" max="1440" value={form.durationMinute} onChange={(event) => setField('durationMinute', Number(event.target.value))} /></Field><Field label="Mapel / domain"><input className="min-h-11 rounded-xl border px-3" value={form.subjectId} onChange={(event) => setField('subjectId', event.target.value)} placeholder="Bahasa Indonesia / Matematika" /></Field></div></Card>

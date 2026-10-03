@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { ArrowDown, ArrowUp, Copy, Edit3, Plus, Send, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Copy, Edit3, ExternalLink, Plus, Send, Trash2 } from 'lucide-react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type Session } from './api'
 import { QuestionEditor } from './QuestionEditor'
+import { QuestionAnswerControl, StimulusContent, type Stimulus } from './QuestionAnswerControl'
+import type { QuestionConfig } from './questionTypes'
 
 type Question = {
   id: string; revision?: number; packageId?: string; packagePosition?: number; title: string; type: string; prompt: string; description?: string; configJson?: string; answerJson?: string; rubricJson?: string; stimulusJson?: string; points: number; status: string; subject?: string; grade?: number; tags?: string; templatePlaceholder?: boolean; [key: string]: unknown
@@ -49,9 +51,10 @@ export function QuestionPackages({ session, notify }: { session: Session; notify
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const routeMatch = location.pathname.match(/^\/soal\/paket\/([^/]+)(?:\/(edit|penugasan))?\/?$/)
+  const routeMatch = location.pathname.match(/^\/soal\/paket\/([^/]+)(?:\/(edit|penugasan|preview)(?:\/([^/]+))?)?\/?$/)
   const packageId = routeMatch ? decodeURIComponent(routeMatch[1]) : ''
   const view = routeMatch?.[2] || 'detail'
+  const previewQuestionID = routeMatch?.[3] ? decodeURIComponent(routeMatch[3]) : ''
   const [packages, setPackages] = useState<QuestionPackage[]>([])
   const [packageData, setPackageData] = useState<PackageDetail | null>(null)
   const [questions, setQuestions] = useState<Question[]>([])
@@ -71,6 +74,7 @@ export function QuestionPackages({ session, notify }: { session: Session; notify
   const [studentIds, setStudentIds] = useState<string[]>([])
   const [studentClassFilter, setStudentClassFilter] = useState('')
   const [studentSearch, setStudentSearch] = useState('')
+  const [previewAnswer, setPreviewAnswer] = useState<unknown>(null)
   const dragID = useRef('')
   const canWrite = session.user.role !== 'kepala_sekolah'
   const packageListURL = `/staff/question-packages${packageQuery(location.search) ? `?${packageQuery(location.search)}` : ''}`
@@ -112,6 +116,8 @@ export function QuestionPackages({ session, notify }: { session: Session; notify
     }
     return () => { active = false }
   }, [packageId, view, packageListURL, session.accessToken, notify])
+
+  useEffect(() => { setPreviewAnswer(null) }, [previewQuestionID])
 
   const subjects = useMemo(() => [...new Set(packages.map((row) => row.subject?.trim()).filter((row): row is string => Boolean(row)))].sort((a, b) => a.localeCompare(b, 'id')), [packages])
   const listClassNames = new Map(classes.map((row) => [row.id, row.nama]))
@@ -266,6 +272,10 @@ export function QuestionPackages({ session, notify }: { session: Session; notify
     })
   }
 
+  function openQuestionPreview(questionID: string) {
+    window.open(`${window.location.origin}${packagePath(packageId, `/preview/${encodeURIComponent(questionID)}`)}`, '_blank', 'noopener,noreferrer')
+  }
+
   function editQuestion(question?: Question) {
     setEditingQuestion(question)
     setQuestionEditorOpen(true)
@@ -287,17 +297,31 @@ export function QuestionPackages({ session, notify }: { session: Session; notify
   if (loading) return <div role="status" className="rounded-2xl border bg-white p-8 text-center text-slate-500">Memuat detail paket…</div>
   if (!packageData) return <section className="rounded-2xl border bg-white p-6"><h2 className="text-xl font-bold">Paket tidak ditemukan</h2><p className="mt-2 text-sm text-slate-600">Tautan mungkin sudah tidak berlaku atau paket tidak termasuk kewenangan akun ini.</p><Link to="/soal" className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-brand px-4 font-semibold text-white">Kembali ke daftar paket</Link></section>
 
+  if (view === 'preview') {
+    const question = packageData.questions.find((row) => row.id === previewQuestionID)
+    if (!question) return <section className="rounded-2xl border bg-white p-6"><h2 className="text-xl font-bold">Soal tidak ditemukan di paket ini</h2><p className="mt-2 text-sm text-slate-600">Tautan mungkin sudah tidak berlaku atau soal telah dikeluarkan dari paket.</p><Link to={packagePath(packageId)} className="mt-4 inline-flex min-h-11 items-center rounded-xl bg-brand px-4 font-semibold text-white">Kembali ke paket</Link></section>
+    let config: QuestionConfig = {}
+    let stimulus: Stimulus[] = []
+    try { config = JSON.parse(question.configJson || '{}') as QuestionConfig } catch { config = {} }
+    try { const parsed: unknown = JSON.parse(question.stimulusJson || '[]'); stimulus = Array.isArray(parsed) ? parsed as Stimulus[] : [] } catch { stimulus = [] }
+    const studentQuestion = { id: question.id, title: question.title, type: question.type, prompt: question.prompt, description: question.description, config, points: question.points }
+    return <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-3 shadow-sm"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-brand">Pratinjau tampilan siswa</p><h2 className="truncate font-bold">{packageData.title}</h2></div><Link to={packagePath(packageId)} className="inline-flex min-h-11 items-center rounded-xl border px-4 font-semibold">← Kembali ke paket</Link></div>
+      <article className="rounded-2xl border bg-white p-5 shadow-sm sm:p-8"><div className="mb-5 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">Ini pratinjau interaktif. Jawaban yang dipilih di sini tidak dikirim dan tidak mengubah nilai siswa.</div><StimulusContent rows={stimulus} accessToken={session.accessToken}/><p className="text-xs font-bold uppercase tracking-wider text-slate-500">{question.type.replaceAll('_', ' ')} · {question.points} poin</p><h1 className="mt-2 text-2xl font-bold">{question.title}</h1><p className="mt-3 whitespace-pre-wrap text-lg leading-relaxed">{question.prompt}</p>{question.description && <p className="mt-3 whitespace-pre-wrap text-sm text-slate-600">{question.description}</p>}<div className="mt-5"><QuestionAnswerControl question={studentQuestion} questionId={`package-preview-${question.id}`} value={previewAnswer} onChange={setPreviewAnswer} accessToken={session.accessToken}/></div></article>
+    </div>
+  }
+
   const classTargetIDs = packageData.assignments.filter((row) => row.targetType === 'class').map((row) => row.targetId)
   const studentTargetIDs = packageData.assignments.filter((row) => row.targetType === 'student').map((row) => row.targetId)
   const assignmentLabel = classTargetIDs.length ? classTargetIDs.map((id) => classNames.get(id) || id).join(', ') : studentTargetIDs.length ? studentTargetIDs.map((id) => studentNames.get(id) || id).join(', ') : 'Belum ada target penugasan'
   const availableStudents = students.filter((row) => (!studentClassFilter || row.kelasId === studentClassFilter) && `${row.nama} ${row.nisn}`.toLowerCase().includes(studentSearch.toLowerCase()))
 
   return <div className="space-y-4">
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-3 shadow-sm"><div className="flex min-w-0 flex-wrap items-center gap-2"><Link to="/soal" className="inline-flex min-h-11 items-center rounded-xl border px-3 font-semibold">← Paket Soal</Link><div className="min-w-0"><p className="truncate font-bold">{packageData.title}</p><p className="text-xs text-slate-500">{view === 'edit' ? 'Edit isi dan urutan paket' : view === 'penugasan' ? 'Target kelas atau siswa' : 'Detail paket soal'}</p></div></div><div className="flex flex-wrap gap-2">{view !== 'edit' && packageData.status !== 'archived' && <Link to={packagePath(packageId, '/edit')} className="inline-flex min-h-11 items-center gap-2 rounded-xl border px-3 font-semibold"><Edit3 className="size-4"/>Edit</Link>}{view !== 'penugasan' && <Link to={packagePath(packageId, '/penugasan')} className="inline-flex min-h-11 items-center rounded-xl border px-3 font-semibold">Penugasan</Link>}</div></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-3 shadow-sm"><div className="flex min-w-0 flex-wrap items-center gap-2"><Link to="/soal" className="inline-flex min-h-11 items-center rounded-xl border px-3 font-semibold">← Paket Soal</Link><div className="min-w-0"><p className="truncate font-bold">{packageData.title}</p><p className="text-xs text-slate-500">{view === 'edit' ? 'Edit isi dan urutan paket' : view === 'penugasan' ? 'Target kelas atau siswa' : 'Detail paket soal'}</p></div></div><div className="flex flex-wrap gap-2">{view !== 'edit' && view !== 'preview' && packageData.status !== 'archived' && <Link to={packagePath(packageId, '/edit')} className="inline-flex min-h-11 items-center gap-2 rounded-xl border px-3 font-semibold"><Edit3 className="size-4"/>Edit</Link>}{view !== 'penugasan' && view !== 'preview' && <Link to={packagePath(packageId, '/penugasan')} className="inline-flex min-h-11 items-center rounded-xl border px-3 font-semibold">Penugasan</Link>}</div></div>
 
     {view === 'detail' && <>
       <section className="rounded-2xl border bg-white p-5 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-brand">{packageData.subject || 'Mata pelajaran belum diisi'} · {packageData.status === 'published' ? 'Diterbitkan' : packageData.status === 'archived' ? 'Arsip' : 'Draf'}</p><h2 className="mt-1 text-2xl font-bold">{packageData.title}</h2><p className="mt-2 max-w-3xl whitespace-pre-wrap text-sm text-slate-600">{packageData.description || 'Belum ada deskripsi untuk paket ini.'}</p></div><div className="flex flex-wrap gap-2">{canWrite && packageData.status !== 'archived' && packageData.questions.length > 0 && <><Link to={`/ujian?paket=${encodeURIComponent(packageId)}&jenis=ujian_online`} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-brand px-4 font-semibold text-white">Buat Ujian Online</Link><Link to={`/ujian?paket=${encodeURIComponent(packageId)}&jenis=simulasi`} className="inline-flex min-h-11 items-center gap-2 rounded-xl border px-3 font-semibold">Buat Simulasi</Link></>}{canWrite && packageData.status === 'draft' && <button type="button" disabled={saving} onClick={() => void publishPackage()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border px-3 font-semibold"><Send className="size-4"/>Terbitkan paket</button>}{canWrite && <button type="button" disabled={saving} onClick={() => void duplicatePackage()} className="min-h-11 rounded-xl border px-3 font-semibold">Duplikasi</button>}{canWrite && packageData.status === 'archived' && <button type="button" disabled={saving} onClick={() => void unarchivePackage()} className="min-h-11 rounded-xl border px-3 font-semibold">Pulihkan dari arsip</button>}{canWrite && packageData.status !== 'archived' && <button type="button" disabled={saving} onClick={() => void archivePackage()} className="min-h-11 rounded-xl border px-3 font-semibold text-rose-700">Arsipkan</button>}<button type="button" onClick={() => { void navigator.clipboard?.writeText(`${window.location.origin}${packagePath(packageId)}`).then(() => notify({ kind: 'ok', text: 'Tautan detail paket disalin.' })).catch(() => notify({ kind: 'error', text: 'Tautan tidak dapat disalin otomatis. Salin URL dari bilah alamat.' })) }} className="inline-flex min-h-11 items-center gap-2 rounded-xl border px-3 font-semibold"><Copy className="size-4"/>Salin tautan</button></div></div><div className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-3"><div><p className="text-xs text-slate-500">Jumlah soal</p><b>{packageData.questions.length} butir</b></div><div><p className="text-xs text-slate-500">Target</p><b>{assignmentLabel}</b></div><div><p className="text-xs text-slate-500">Dibuat</p><b>{new Date(packageData.createdAt).toLocaleString('id-ID')}</b></div></div>{packageData.status === 'published' && <p className="mt-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900">Paket terbit dikunci agar isi tetap konsisten. Untuk versi baru, duplikasi paket terlebih dahulu.</p>}</section>
-      <section className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-lg font-bold">Daftar soal</h3><p className="text-sm text-slate-600">Urutan yang tampil di sini adalah urutan butir dalam paket.</p></div>{canWrite && packageData.status === 'draft' && <Link to={packagePath(packageId, '/edit')} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-brand px-4 font-semibold text-white"><Plus className="size-4"/>Tambah atau susun soal</Link>}</div>{packageData.questions.length === 0 ? <div className="rounded-2xl border border-dashed bg-white p-8 text-center"><b>Paket ini belum memiliki soal.</b><p className="mt-1 text-sm text-slate-600">Tambahkan soal dari pustaka atau buat pertanyaan baru.</p>{canWrite && packageData.status === 'draft' && <Link to={packagePath(packageId, '/edit')} className="mt-3 inline-flex min-h-11 items-center rounded-xl bg-brand px-4 font-semibold text-white">Mulai tambah soal</Link>}</div> : packageData.questions.map((question, index) => <article key={question.id} className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex min-w-0 gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-white">{index + 1}</span><div className="min-w-0"><p className="text-xs font-semibold uppercase text-slate-500">{question.type.replaceAll('_', ' ')} · {question.points} poin</p><h4 className="mt-1 font-bold">{question.title}</h4><p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{question.prompt}</p></div></div>{question.status === 'draft' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-900">Draf</span>}</div>{canWrite && packageData.status === 'draft' && question.status === 'draft' && <button type="button" className="mt-3 min-h-10 rounded-lg border px-3 text-sm font-semibold" onClick={() => { setQuestions(packageData.questions); editQuestion(question) }}>Edit butir soal</button>}</article>)}</section>
+      <section className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-2"><div><h3 className="text-lg font-bold">Daftar soal</h3><p className="text-sm text-slate-600">Urutan yang tampil di sini adalah urutan butir dalam paket.</p></div>{canWrite && packageData.status === 'draft' && <Link to={packagePath(packageId, '/edit')} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-brand px-4 font-semibold text-white"><Plus className="size-4"/>Tambah atau susun soal</Link>}</div>{packageData.questions.length === 0 ? <div className="rounded-2xl border border-dashed bg-white p-8 text-center"><b>Paket ini belum memiliki soal.</b><p className="mt-1 text-sm text-slate-600">Tambahkan soal dari pustaka atau buat pertanyaan baru.</p>{canWrite && packageData.status === 'draft' && <Link to={packagePath(packageId, '/edit')} className="mt-3 inline-flex min-h-11 items-center rounded-xl bg-brand px-4 font-semibold text-white">Mulai tambah soal</Link>}</div> : packageData.questions.map((question, index) => <article key={question.id} className="rounded-2xl border bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex min-w-0 gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand text-sm font-bold text-white">{index + 1}</span><div className="min-w-0"><p className="text-xs font-semibold uppercase text-slate-500">{question.type.replaceAll('_', ' ')} · {question.points} poin</p><h4 className="mt-1 font-bold">{question.title}</h4><p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{question.prompt}</p></div></div>{question.status === 'draft' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-900">Draf</span>}</div><div className="mt-3 flex flex-wrap gap-2">{canWrite && packageData.status === 'draft' && question.status === 'draft' && <button type="button" className="min-h-11 rounded-lg border px-3 text-sm font-semibold" onClick={() => { setQuestions(packageData.questions); editQuestion(question) }}>Edit butir soal</button>}<button type="button" className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-3 text-sm font-semibold" onClick={() => openQuestionPreview(question.id)}><ExternalLink className="size-4"/>Pratinjau di tab baru</button></div></article>)}</section>
     </>}
 
     {view === 'edit' && <>
