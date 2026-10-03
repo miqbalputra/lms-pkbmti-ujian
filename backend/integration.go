@@ -87,7 +87,23 @@ func readJSONResponse[T any](response *http.Response, output *T) error {
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return fmt.Errorf("LMS merespons %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		var details map[string]any
+		message := ""
+		if json.Unmarshal(data, &details) == nil {
+			for _, key := range []string{"error", "message"} {
+				if value, ok := details[key].(string); ok && strings.TrimSpace(value) != "" {
+					message = strings.TrimSpace(value)
+					break
+				}
+			}
+		}
+		if len(message) > 300 {
+			message = message[:300]
+		}
+		if message == "" {
+			return fmt.Errorf("LMS merespons HTTP %d", response.StatusCode)
+		}
+		return fmt.Errorf("LMS merespons HTTP %d: %s", response.StatusCode, message)
 	}
 	return json.Unmarshal(data, output)
 }
@@ -102,21 +118,79 @@ func setSyncState(db *gorm.DB, key, value string) error {
 	return db.Save(&SyncState{Key: key, Value: value, UpdatedAt: time.Now()}).Error
 }
 
-func (s *Server) syncMaster() error {
-	cursor := syncCursor(s.db)
-	path := "/api/integrations/cbt/v1/master"
-	if cursor != "" {
-		path += "?cursor=" + url.QueryEscape(cursor)
+type syncCounts struct {
+	Accounts int `json:"accounts"`
+	Classes  int `json:"classes"`
+	Students int `json:"students"`
+	Tutors   int `json:"tutors"`
+	Subjects int `json:"subjects"`
+}
+
+func syncErrorMessage(err error) string {
+	if err == nil {
+		return "Sinkronisasi LMS berhasil."
 	}
-	response, err := s.lmsRequest(http.MethodGet, path, nil)
-	if err != nil {
-		return err
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "http 401") || strings.Contains(message, "http 403"):
+		return "LMS menolak autentikasi integrasi. Periksa LMS_INTEGRATION_KEY_ID dan LMS_INTEGRATION_HMAC_SECRET di kedua aplikasi."
+	case strings.Contains(message, "integrasi cbt belum dikonfigurasi"):
+		return "Integrasi belum dikonfigurasi di LMS. Isi CBT_INTEGRATION_KEY_ID dan CBT_INTEGRATION_HMAC_SECRET di environment LMS, lalu samakan nilainya dengan LMS_INTEGRATION_KEY_ID dan LMS_INTEGRATION_HMAC_SECRET di CBT."
+	case strings.Contains(message, "http 404"):
+		return "Endpoint sinkronisasi LMS tidak ditemukan. Periksa LMS_BASE_URL dan pastikan backend LMS mendukung integrasi CBT."
+	case strings.Contains(message, "http 502"):
+		return "Gateway gagal menghubungi LMS (HTTP 502). Periksa LMS_BASE_URL, domain/port di Coolify, dan log backend LMS; data terakhir tetap digunakan."
+	case strings.Contains(message, "http 503"):
+		return "Endpoint integrasi LMS belum siap (HTTP 503). Periksa CBT_INTEGRATION_KEY_ID dan CBT_INTEGRATION_HMAC_SECRET di environment LMS, lalu lihat log LMS; data terakhir tetap digunakan."
+	case strings.Contains(message, "http 504"):
+		return "Layanan integrasi LMS sedang tidak tersedia. Data terakhir tetap digunakan; sistem akan mencoba lagi otomatis."
+	case strings.Contains(message, "timeout") || strings.Contains(message, "deadline exceeded"):
+		return "LMS tidak merespons dalam batas waktu. Periksa koneksi server dan status LMS; sistem akan mencoba lagi otomatis."
+	case strings.Contains(message, "connection refused") || strings.Contains(message, "no such host") || strings.Contains(message, "network is unreachable"):
+		return "CBT tidak dapat terhubung ke LMS. Periksa LMS_BASE_URL, DNS, dan koneksi jaringan antarserver."
+	case strings.Contains(message, "invalid character") || strings.Contains(message, "unexpected eof"):
+		return "LMS mengirim data yang formatnya tidak valid. Periksa versi backend dan log integrasi LMS."
+	default:
+		return "Sinkronisasi LMS gagal setelah beberapa percobaan. Data terakhir tetap digunakan; lihat detail teknis atau log server."
 	}
+}
+
+func (s *Server) fetchMasterPayload(cursor string) (masterPayload, error) {
 	var payload masterPayload
-	if err := readJSONResponse(response, &payload); err != nil {
-		return err
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		path := "/api/integrations/cbt/v1/master"
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
+		}
+		response, err := s.lmsRequest(http.MethodGet, path, nil)
+		if err == nil {
+			err = readJSONResponse(response, &payload)
+		}
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
 	}
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	if lastErr != nil {
+		return masterPayload{}, fmt.Errorf("LMS sync failed after 3 attempts: %w", lastErr)
+	}
+	return payload, nil
+}
+
+func (s *Server) syncMaster() (syncCounts, error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	payload, err := s.fetchMasterPayload(syncCursor(s.db))
+	if err != nil {
+		return syncCounts{}, err
+	}
+	counts := syncCounts{Accounts: len(payload.Accounts), Classes: len(payload.Kelas), Students: len(payload.PesertaDidik), Tutors: len(payload.Tutor), Subjects: len(payload.Mapel)}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
 		for _, source := range payload.Kelas {
 			if source.ID == "" {
 				continue
@@ -183,15 +257,60 @@ func (s *Server) syncMaster() error {
 		}
 		return nil
 	})
+	return counts, err
+}
+
+func (s *Server) recordMasterSync(trigger, actor string) (SyncRun, error) {
+	run := SyncRun{Trigger: trigger, Status: "running", StartedAt: time.Now().UTC()}
+	if err := s.db.Create(&run).Error; err != nil {
+		return run, err
+	}
+	counts, syncErr := s.syncMaster()
+	run.Accounts, run.Classes, run.Students, run.Tutors, run.Subjects = counts.Accounts, counts.Classes, counts.Students, counts.Tutors, counts.Subjects
+	finished := time.Now().UTC()
+	run.FinishedAt = &finished
+	if syncErr != nil {
+		run.Status = "failed"
+		run.Message = syncErrorMessage(syncErr)
+		run.ErrorDetails = syncErr.Error()
+	} else {
+		run.Status = "success"
+		run.Message = fmt.Sprintf("Batch sinkronisasi berhasil: %d siswa, %d kelas, %d tutor, %d mapel, %d akun diperbarui.", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts)
+	}
+	if err := s.db.Save(&run).Error; err != nil {
+		return run, err
+	}
+	state := map[string]string{
+		"last_master_sync_status":  run.Status,
+		"last_master_sync_message": run.Message,
+		"last_master_sync_at":      finished.Format(time.RFC3339),
+		"last_master_sync_counts":  fmt.Sprintf("siswa=%d, kelas=%d, tutor=%d, mapel=%d, akun=%d", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts),
+	}
+	if syncErr != nil {
+		state["last_master_sync_error"] = run.ErrorDetails
+	} else {
+		state["last_master_sync_error"] = ""
+	}
+	for key, value := range state {
+		if err := setSyncState(s.db, key, value); err != nil {
+			return run, err
+		}
+	}
+	if actor != "" {
+		s.audit(actor, "manual_master_sync", "lms")
+	}
+	return run, syncErr
 }
 func (s *Server) runWorkers() {
 	ticker := time.NewTicker(s.cfg.SyncInterval)
 	defer ticker.Stop()
 	go s.runDeadlineWorker()
-	_ = s.syncMaster()
+	if _, err := s.recordMasterSync("automatic", ""); err != nil {
+		logError("master sync failed: %v", err)
+	}
 	_ = s.flushOutbox()
 	for range ticker.C {
-		if err := s.syncMaster(); err != nil {
+		if _, err := s.recordMasterSync("automatic", ""); err != nil {
 			logError("master sync failed: %v", err)
 		}
 		if err := s.flushOutbox(); err != nil {
@@ -247,13 +366,20 @@ func (s *Server) syncStatus(c *fiber.Ctx) error {
 	}
 	return c.JSON(states)
 }
+func (s *Server) syncHistory(c *fiber.Ctx) error {
+	var runs []SyncRun
+	if err := s.db.Order("started_at desc").Limit(10).Find(&runs).Error; err != nil {
+		return err
+	}
+	return c.JSON(runs)
+}
 func (s *Server) runSync(c *fiber.Ctx) error {
-	if err := s.syncMaster(); err != nil {
-		return fiber.NewError(502, "Sinkronisasi LMS gagal: "+err.Error())
+	run, err := s.recordMasterSync("manual", currentAccount(c).ID)
+	if err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": run.Message, "syncRun": run})
 	}
 	_ = s.flushOutbox()
-	s.audit(currentAccount(c).ID, "manual_master_sync", "lms")
-	return c.JSON(fiber.Map{"status": "ok", "cursor": syncCursor(s.db)})
+	return c.JSON(fiber.Map{"status": "ok", "cursor": syncCursor(s.db), "syncRun": run})
 }
 
 type resultAnswer struct {

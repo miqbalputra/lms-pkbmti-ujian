@@ -11,6 +11,11 @@ export async function api<T>(path: string, init: RequestInit = {}, session = loa
   if (session?.accessToken) headers.set('Authorization', `Bearer ${session.accessToken}`)
   const response = await fetch(`/api${path}`, { ...init, headers })
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new ApiError(payload.error || `Permintaan gagal (${response.status})`, response.status)
+  if (!response.ok) {
+    const fallback = response.status === 502
+      ? 'Layanan CBT atau LMS sementara tidak tersedia (HTTP 502). Periksa LMS_BASE_URL dan status aplikasi di Coolify.'
+      : `Permintaan gagal (${response.status})`
+    throw new ApiError(payload.error || fallback, response.status)
+  }
   return payload as T
 }

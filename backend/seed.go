@@ -58,7 +58,7 @@ func (s *Server) seedDevelopmentExamples() error {
 		}
 		created := make([]Question, len(questions))
 		for index, row := range questions {
-			created[index] = Question{OwnerID: admin.ID, Title: row.Title, Program: row.Program, Grade: row.Grade, Mode: row.Mode, Subject: row.Subject, Domain: row.Domain, Topic: developmentSeedTopic, Type: row.Type, Prompt: row.Prompt, Description: row.Description, StimulusJSON: row.Stimulus, ConfigJSON: row.Config, AnswerJSON: row.Key, RubricJSON: row.Rubric, Points: row.Points, Status: "draft", Revision: 1}
+			created[index] = Question{OwnerID: admin.ID, Title: row.Title, Program: row.Program, Grade: row.Grade, Mode: row.Mode, Subject: row.Subject, Domain: row.Domain, Topic: developmentSeedTopic, Type: row.Type, Prompt: row.Prompt, Description: row.Description, StimulusJSON: row.Stimulus, ConfigJSON: row.Config, AnswerJSON: row.Key, RubricJSON: row.Rubric, Points: row.Points, Difficulty: "sedang", EstimatedMinutes: defaultEstimatedMinutes(row.Type, row.Prompt), Curriculum: "Belum dipetakan", Status: "draft", Revision: 1}
 			if err := tx.Create(&created[index]).Error; err != nil {
 				return err
 			}
@@ -73,7 +73,7 @@ func (s *Server) seedDevelopmentExamples() error {
 					continue
 				}
 				item := created[index]
-				snapshot, err := json.Marshal(questionSnapshot{ID: item.ID, Title: item.Title, Program: item.Program, Grade: item.Grade, Mode: item.Mode, Subject: item.Subject, Domain: item.Domain, Topic: item.Topic, Type: item.Type, Prompt: item.Prompt, Description: item.Description, StimulusJSON: item.StimulusJSON, ConfigJSON: item.ConfigJSON, AnswerJSON: item.AnswerJSON, RubricJSON: item.RubricJSON, Points: item.Points})
+				snapshot, err := json.Marshal(questionSnapshot{ID: item.ID, Title: item.Title, Program: item.Program, Grade: item.Grade, Mode: item.Mode, Subject: item.Subject, Domain: item.Domain, Topic: item.Topic, Difficulty: item.Difficulty, EstimatedMinutes: item.EstimatedMinutes, Curriculum: item.Curriculum, Type: item.Type, Prompt: item.Prompt, Description: item.Description, StimulusJSON: item.StimulusJSON, ConfigJSON: item.ConfigJSON, AnswerJSON: item.AnswerJSON, RubricJSON: item.RubricJSON, Points: item.Points})
 				if err != nil {
 					return err
 				}

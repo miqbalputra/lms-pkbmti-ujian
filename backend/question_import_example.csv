@@ -1,0 +1,21 @@
+Judul,Jenis,Pertanyaan,Opsi atau baris,Kolom (opsional),Kunci / jawaban,Poin
+Jumlah jeruk,Pilihan ganda,Di keranjang ada 3 jeruk lalu ditambah 2 jeruk. Berapa semuanya?,3|5|7,,2,2
+Pecahan setengah,Pilihan ganda kompleks,Pilih semua pecahan yang sama dengan satu per dua.,2/4|3/5|4/8,,1|3,2
+Kata yang tepat,Dropdown,Ibu membeli ___ di pasar.,sayur|berlari|cepat,,1,1
+Pernyataan tentang air,Benar / salah,Tentukan benar atau salah untuk setiap pernyataan.,Air membeku ketika cukup dingin|Ikan hidup di darat,,Benar|Salah,2
+Pasangan hewan dan makanan,Menjodohkan,Pasangkan setiap hewan dengan makanannya.,Kucing|Sapi,Ikan|Rumput,1|2,2
+Hasil perkalian,Jawaban singkat,Berapakah hasil dari 7 dikali 6?,, ,42|empat puluh dua,2
+Menghemat air,Paragraf / uraian,Jelaskan dua cara menghemat air di rumah.,Ketepatan:3|Penjelasan:2,,,5
+Urutan mencuci tangan,Susun urutan,Urutkan langkah mencuci tangan.,Gunakan sabun|Basahi tangan|Bilas sampai bersih,,2|1|3,3
+Ciri bangun datar,Kisi pilihan tunggal,Tentukan bangun datar untuk setiap ciri.,Memiliki tiga sisi|Memiliki empat sisi sama panjang,Segitiga|Persegi,1|2,2
+Jenis sumber energi,Kisi kotak centang,Centang kategori yang sesuai untuk setiap sumber energi.,Matahari|Batu bara,Terbarukan|Tidak terbarukan,1|2,2
+Hasil pembagian,Skala linear,Pilih nilai hasil dari 24 dibagi 6.,1|5|Belum yakin|Sangat yakin,,4,2
+Penilaian pemahaman,Rating,Beri rating untuk tingkat pemahamanmu pada materi ini.,,,5,1
+Hari Pahlawan,Tanggal,Pada tanggal berapa Hari Pahlawan diperingati?,,,1945-11-10,1
+Waktu mulai belajar,Waktu / durasi,Pukul berapa kegiatan belajar dimulai?,,,07:30,1
+Unggah langkah hitungan,Unggah berkas,Unggah foto langkah penyelesaian soal hitunganmu.,pdf|png|jpg,1|5,,3
+Hasil penjumlahan dua puluh,Pilihan ganda,Berapakah hasil dari 13 ditambah 7?,18|20|22,,2,2
+Kelipatan tiga,Pilihan ganda,Bilangan manakah yang merupakan kelipatan tiga?,10|12|14,,2,2
+Sinonim gembira,Pilihan ganda,Kata yang memiliki arti sama dengan gembira adalah?,sedih|senang|marah,,2,1
+Jumlah sisi segitiga,Pilihan ganda,Berapa jumlah sisi pada segitiga?,2|3|4,,2,1
+Nilai tempat puluhan,Pilihan ganda,Pada bilangan 42 angka 4 menempati nilai tempat apa?,satuan|puluhan|ratusan,,2,2

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 var supportedQuestionTypes = map[string]bool{
@@ -394,6 +396,9 @@ func rowIDs(rows []any) []string {
 }
 
 func validQuestionForPublish(snapshot questionSnapshot) bool {
+	if snapshot.TemplatePlaceholder {
+		return false
+	}
 	config := configObject(snapshot.ConfigJSON)
 	if !validateQuestionConfig(snapshot.Type, snapshot.ConfigJSON) {
 		return false
@@ -578,10 +583,12 @@ func validStimulusJSON(raw string) bool {
 		return true
 	}
 	var blocks []struct {
-		Type    string `json:"type"`
-		Title   string `json:"title"`
-		Content string `json:"content"`
-		Alt     string `json:"alt"`
+		Type        string `json:"type"`
+		Title       string `json:"title"`
+		Content     string `json:"content"`
+		Alt         string `json:"alt"`
+		AssetID     string `json:"assetId"`
+		ContentType string `json:"contentType"`
 	}
 	if json.Unmarshal([]byte(raw), &blocks) != nil {
 		return false
@@ -591,6 +598,18 @@ func validStimulusJSON(raw string) bool {
 			return false
 		}
 		if block.Type == "image" || block.Type == "media" {
+			if block.AssetID != "" {
+				if _, err := uuid.Parse(block.AssetID); err != nil || block.Content != "/api/question-media/"+block.AssetID {
+					return false
+				}
+				if (block.Type == "image" && !strings.HasPrefix(block.ContentType, "image/")) || (block.Type == "media" && !strings.HasPrefix(block.ContentType, "audio/") && !strings.HasPrefix(block.ContentType, "video/")) {
+					return false
+				}
+				if block.Type == "image" && strings.TrimSpace(block.Alt) == "" {
+					return false
+				}
+				continue
+			}
 			parsed, err := url.Parse(strings.TrimSpace(block.Content))
 			if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil {
 				return false

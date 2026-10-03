@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,11 +15,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/helmet"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -31,11 +29,14 @@ import (
 type Config struct {
 	Env, JWTSecret, PublicBaseURL, LMSBaseURL, IntegrationKeyID, IntegrationSecret, UploadsDir string
 	SyncInterval                                                                               time.Duration
+	ForceHTTPS                                                                                 bool
+	TrustedProxies                                                                             []string
 }
 type Server struct {
 	db         *gorm.DB
 	cfg        Config
 	httpClient *http.Client
+	syncMu     sync.Mutex
 }
 
 func env(key, fallback string) string {
@@ -93,10 +94,34 @@ func shuffleSnapshotOptions(raw string, random *rand.Rand) string {
 	return string(encodedSnapshot)
 }
 
+func shuffledAssessmentItems(items []AssessmentItem, attemptSeed, assessmentID string) ([]AssessmentItem, *rand.Rand) {
+	rows := append([]AssessmentItem(nil), items...)
+	first, second := deterministicShuffleSeed(attemptSeed, assessmentID)
+	random := rand.New(rand.NewPCG(first, second))
+	random.Shuffle(len(rows), func(i, j int) { rows[i], rows[j] = rows[j], rows[i] })
+	return rows, random
+}
+
 func main() {
-	cfg := Config{Env: env("APP_ENV", "development"), JWTSecret: env("JWT_SECRET", "development-secret-change-me-32-chars"), PublicBaseURL: env("PUBLIC_BASE_URL", "http://localhost:5173"), LMSBaseURL: strings.TrimRight(env("LMS_BASE_URL", "http://localhost:8080"), "/"), IntegrationKeyID: env("LMS_INTEGRATION_KEY_ID", "cbt-local"), IntegrationSecret: env("LMS_INTEGRATION_HMAC_SECRET", "development-integration-secret-change-me"), UploadsDir: env("UPLOADS_DIR", "uploads"), SyncInterval: mustDuration(env("LMS_SYNC_INTERVAL", "5m"))}
+	trustedProxies, err := parseTrustedProxies(env("TRUSTED_PROXY_IPS", ""))
+	if err != nil {
+		panic(err)
+	}
+	forceHTTPS, err := strconv.ParseBool(env("FORCE_HTTPS", "false"))
+	if err != nil {
+		panic("FORCE_HTTPS harus bernilai true atau false")
+	}
+	cfg := Config{Env: env("APP_ENV", "development"), JWTSecret: env("JWT_SECRET", "development-secret-change-me-32-chars"), PublicBaseURL: env("PUBLIC_BASE_URL", "http://localhost:5173"), LMSBaseURL: strings.TrimRight(env("LMS_BASE_URL", "http://localhost:8080"), "/"), IntegrationKeyID: env("LMS_INTEGRATION_KEY_ID", "cbt-local"), IntegrationSecret: env("LMS_INTEGRATION_HMAC_SECRET", "development-integration-secret-change-me"), UploadsDir: env("UPLOADS_DIR", "uploads"), SyncInterval: mustDuration(env("LMS_SYNC_INTERVAL", "5m")), ForceHTTPS: forceHTTPS, TrustedProxies: trustedProxies}
 	if len(cfg.JWTSecret) < 32 && cfg.Env == "production" {
 		panic("JWT_SECRET minimal 32 karakter")
+	}
+	if cfg.ForceHTTPS {
+		if err := validateHTTPSBaseURL(cfg.PublicBaseURL); err != nil {
+			panic(err)
+		}
+		if len(cfg.TrustedProxies) == 0 {
+			panic("FORCE_HTTPS=true memerlukan TRUSTED_PROXY_IPS yang membatasi proxy Coolify tepercaya; jangan mempercayai X-Forwarded-Proto dari semua alamat")
+		}
 	}
 	db, err := gorm.Open(postgres.Open(os.Getenv("DATABASE_URL")), &gorm.Config{TranslateError: true})
 	if err != nil {
@@ -112,8 +137,10 @@ func main() {
 	if err := s.seedDevelopmentExamples(); err != nil {
 		panic(err)
 	}
-	app := fiber.New(fiber.Config{ErrorHandler: apiError, BodyLimit: 20 * 1024 * 1024})
-	app.Use(helmet.New())
+	app := fiber.New(fiber.Config{ErrorHandler: apiError, BodyLimit: 20 * 1024 * 1024, EnableTrustedProxyCheck: true, TrustedProxies: cfg.TrustedProxies})
+	app.Use(securityHeaders())
+	app.Use(httpsRedirect(cfg.ForceHTTPS, cfg.PublicBaseURL))
+	app.Use(hidePoweredBy())
 	app.Use(cors.New(cors.Config{AllowOrigins: cfg.PublicBaseURL, AllowHeaders: "Origin, Content-Type, Authorization, X-Request-ID", AllowCredentials: false}))
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "cbt", "time": time.Now().UTC()})
@@ -126,6 +153,7 @@ func main() {
 	})
 	api.Post("/public/ujian-online/cek", s.publicExamLogin)
 	api.Get("/public/config", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"publicBaseUrl": s.cfg.PublicBaseURL}) })
+	api.Get("/question-media/:id", s.auth, s.downloadQuestionMedia)
 	student := api.Group("/student", s.auth, requireRoles("siswa"))
 	student.Get("/assessments", s.studentAssessments)
 	student.Get("/attempts", s.studentAttempts)
@@ -141,19 +169,49 @@ func main() {
 	student.Post("/attempts/:id/recovery", s.submitLateRecovery)
 	staff := api.Group("/staff", s.auth, requireRoles("admin", "guru", "kepala_sekolah"))
 	staff.Get("/questions", s.listQuestions)
+	staff.Get("/question-folders", s.listQuestionFolders)
+	staff.Post("/question-folders", s.createQuestionFolder)
+	staff.Put("/question-folders/:id", s.updateQuestionFolder)
+	staff.Delete("/question-folders/:id", s.deleteQuestionFolder)
 	staff.Post("/questions", s.createQuestion)
+	staff.Put("/questions/:id/folder", s.moveQuestionFolder)
+	staff.Post("/questions/metadata-defaults", s.fillQuestionMetadataDefaults)
+	staff.Post("/question-media", s.uploadQuestionMedia)
+	staff.Post("/questions/import", s.importQuestions)
+	staff.Get("/questions/import/template/:format", s.downloadQuestionImportTemplate)
+	staff.Get("/questions/import/example-20", s.downloadQuestionImportExample)
 	staff.Put("/questions/:id", s.updateQuestion)
+	staff.Post("/questions/:id/revision", s.createQuestionRevision)
+	staff.Get("/questions/:id/history", s.questionHistory)
+	staff.Post("/questions/:id/restore/:versionId", s.restoreQuestionVersion)
 	staff.Delete("/questions/:id", s.archiveQuestion)
+	staff.Post("/questions/:id/trash", s.trashQuestion)
+	staff.Post("/questions/:id/restore", s.restoreQuestion)
+	staff.Post("/questions/:id/unarchive", s.unarchiveQuestion)
 	staff.Get("/assessments", s.listAssessments)
+	staff.Get("/schedule", s.listAssessmentSchedule)
+	staff.Get("/assessments/:id/monitor", s.assessmentMonitor)
+	staff.Get("/assessment-templates", s.listAssessmentTemplates)
+	staff.Post("/assessment-templates/:templateId/draft", s.createAssessmentTemplateDraft)
 	staff.Post("/assessments", s.createAssessment)
 	staff.Post("/assessments/drafts", s.createAssessmentDraft)
 	staff.Get("/assessments/:id", s.getAssessment)
+	staff.Post("/assessments/:id/duplicate", s.duplicateAssessment)
 	staff.Put("/assessments/:id/draft", s.saveAssessmentDraft)
 	staff.Put("/assessments/:id", s.updateAssessment)
 	staff.Post("/assessments/:id/publish", s.publishAssessment)
+	staff.Post("/assessments/:id/archive", s.archiveAssessment)
+	staff.Post("/assessments/:id/unarchive", s.unarchiveAssessment)
+	staff.Post("/assessments/:id/trash", s.trashAssessment)
+	staff.Post("/assessments/:id/restore", s.restoreAssessment)
+	staff.Get("/trash", s.listTrash)
+	staff.Get("/archive", s.listArchive)
 	staff.Put("/assessments/:id/items/order", s.reorderItems)
 	staff.Get("/assessments/:id/results", s.assessmentResults)
+	staff.Get("/assessments/:id/item-analysis", s.assessmentItemAnalysis)
 	staff.Get("/assessments/:id/results/export.csv", s.exportAssessmentResultsCSV)
+	staff.Get("/assessments/:id/results/export.xlsx", func(c *fiber.Ctx) error { return s.exportAssessmentReport(c, "xlsx") })
+	staff.Get("/assessments/:id/results/export.pdf", func(c *fiber.Ctx) error { return s.exportAssessmentReport(c, "pdf") })
 	staff.Get("/attempts/:id", s.staffAttemptDetail)
 	staff.Post("/answers/:id/grade", s.gradeAnswer)
 	staff.Get("/answers/:id/files/:fileId", s.downloadStaffAnswerFile)
@@ -161,7 +219,9 @@ func main() {
 	staff.Post("/recoveries/:id/review", s.reviewAttemptRecovery)
 	staff.Get("/master/students", s.listStudents)
 	staff.Get("/master/classes", s.listClasses)
+	staff.Post("/master/classes/manual-label", s.createManualClassLabel)
 	staff.Get("/sync/status", s.syncStatus)
+	staff.Get("/sync/history", s.syncHistory)
 	staff.Post("/sync/run", s.runSync)
 	staff.Post("/migrations/import", s.importLegacy)
 	admin := api.Group("/admin", s.auth, requireRoles("admin"))
@@ -187,7 +247,7 @@ func apiError(c *fiber.Ctx, err error) error {
 	return c.Status(code).JSON(fiber.Map{"error": message})
 }
 func (s *Server) migrate() error {
-	return s.db.AutoMigrate(&CBTAccount{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &Question{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
+	return s.db.AutoMigrate(&CBTAccount{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
 }
 func (s *Server) ensureAdmin() error {
 	var count int64
@@ -208,6 +268,8 @@ func (s *Server) audit(actor, action, resource string) {
 }
 
 type questionInput struct {
+	Revision            int     `json:"revision"`
+	FolderID            string  `json:"folderId"`
 	Title               string  `json:"title"`
 	Program             string  `json:"program"`
 	Grade               int     `json:"grade"`
@@ -219,6 +281,8 @@ type questionInput struct {
 	Competency          string  `json:"competency"`
 	CognitiveLevel      string  `json:"cognitiveLevel"`
 	Difficulty          string  `json:"difficulty"`
+	EstimatedMinutes    int     `json:"estimatedMinutes"`
+	Curriculum          string  `json:"curriculum"`
 	Tags                string  `json:"tags"`
 	Type                string  `json:"type"`
 	Prompt              string  `json:"prompt"`
@@ -236,6 +300,31 @@ func normalizeQuestionInput(in *questionInput) error {
 	in.Title = strings.TrimSpace(in.Title)
 	in.Type = strings.TrimSpace(in.Type)
 	in.Prompt = strings.TrimSpace(in.Prompt)
+	in.FolderID = strings.TrimSpace(in.FolderID)
+	in.Tags = normalizeQuestionTags(in.Tags)
+	in.Difficulty = strings.ToLower(strings.TrimSpace(in.Difficulty))
+	if in.Difficulty == "" {
+		in.Difficulty = "sedang"
+	}
+	if in.Difficulty != "mudah" && in.Difficulty != "sedang" && in.Difficulty != "sulit" {
+		return fiber.NewError(400, "Kesukaran harus dipilih: mudah, sedang, atau sulit")
+	}
+	in.Curriculum = strings.TrimSpace(in.Curriculum)
+	if in.Curriculum == "" {
+		in.Curriculum = "Belum dipetakan"
+	}
+	if len([]rune(in.Curriculum)) > 120 {
+		return fiber.NewError(400, "Tag kurikulum/CP maksimal 120 karakter")
+	}
+	if in.EstimatedMinutes < 0 {
+		return fiber.NewError(400, "Estimasi waktu tidak boleh negatif")
+	}
+	if in.EstimatedMinutes == 0 {
+		in.EstimatedMinutes = defaultEstimatedMinutes(in.Type, in.Prompt)
+	}
+	if in.EstimatedMinutes > 180 {
+		return fiber.NewError(400, "Estimasi waktu soal maksimal 180 menit")
+	}
 	if in.Title == "" || in.Type == "" || in.Prompt == "" {
 		return fiber.NewError(400, "Judul, jenis, dan pertanyaan wajib diisi")
 	}
@@ -272,13 +361,83 @@ func staffCanWrite(account CBTAccount, ownerID string) bool {
 }
 func (s *Server) listQuestions(c *fiber.Ctx) error {
 	account := currentAccount(c)
-	query := s.db.Where("archived_at IS NULL")
+	query := s.db.Where("archived_at IS NULL AND trashed_at IS NULL")
 	if account.Role == "guru" {
 		query = query.Where("owner_id = ?", account.ID)
 	}
+	if folderID := strings.TrimSpace(c.Query("folderId")); folderID != "" {
+		if folderID == "unfiled" {
+			query = query.Where("(folder_id IS NULL OR folder_id = '')")
+		} else {
+			query = query.Where("folder_id = ?", folderID)
+		}
+	}
+	if text := strings.TrimSpace(c.Query("search")); text != "" {
+		query = query.Where("(strpos(lower(title), lower(?)) > 0 OR strpos(lower(prompt), lower(?)) > 0 OR strpos(lower(description), lower(?)) > 0)", text, text, text)
+	}
+	if questionType := strings.TrimSpace(c.Query("type")); questionType != "" {
+		query = query.Where("type = ?", questionType)
+	}
+	if subject := strings.TrimSpace(c.Query("subject")); subject != "" {
+		query = query.Where("lower(subject) = lower(?)", subject)
+	}
+	if grade := strings.TrimSpace(c.Query("grade")); grade != "" {
+		if gradeValue, err := strconv.Atoi(grade); err == nil && gradeValue >= 1 && gradeValue <= 12 {
+			query = query.Where("grade = ?", gradeValue)
+		} else {
+			return fiber.NewError(400, "Filter kelas harus berada pada rentang 1–12")
+		}
+	}
+	if difficulty := strings.TrimSpace(c.Query("difficulty")); difficulty != "" {
+		query = query.Where("lower(difficulty) = lower(?)", difficulty)
+	}
 	var rows []Question
-	if err := query.Order("updated_at desc").Find(&rows).Error; err != nil {
+	sortBy := strings.TrimSpace(c.Query("sort"))
+	if sortBy == "used" {
+		query = query.Order("updated_at DESC")
+	} else {
+		sortBy = "newest"
+		query = query.Order("updated_at DESC")
+	}
+	if err := query.Find(&rows).Error; err != nil {
 		return err
+	}
+	if tag := strings.TrimSpace(c.Query("tag")); tag != "" {
+		filtered := rows[:0]
+		for _, row := range rows {
+			if questionHasTag(row.Tags, tag) {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	if len(rows) > 0 {
+		ids := make([]string, len(rows))
+		for index := range rows {
+			ids[index] = rows[index].ID
+		}
+		var usage []struct {
+			QuestionID string
+			UsedCount  int64
+		}
+		if err := s.db.Model(&AssessmentItem{}).Select("assessment_items.question_id, COUNT(DISTINCT assessment_items.assessment_id) AS used_count").Joins("JOIN assessments ON assessments.id = assessment_items.assessment_id").Where("assessment_items.question_id IN ? AND assessments.status IN ? AND assessments.trashed_at IS NULL", ids, []string{"published", "archived"}).Group("assessment_items.question_id").Scan(&usage).Error; err != nil {
+			return err
+		}
+		counts := make(map[string]int64, len(usage))
+		for _, item := range usage {
+			counts[item.QuestionID] = item.UsedCount
+		}
+		for index := range rows {
+			rows[index].UsedCount = counts[rows[index].ID]
+		}
+		if sortBy == "used" {
+			sort.SliceStable(rows, func(i, j int) bool {
+				if rows[i].UsedCount == rows[j].UsedCount {
+					return rows[i].UpdatedAt.After(rows[j].UpdatedAt)
+				}
+				return rows[i].UsedCount > rows[j].UsedCount
+			})
+		}
 	}
 	return c.JSON(rows)
 }
@@ -294,7 +453,16 @@ func (s *Server) createQuestion(c *fiber.Ctx) error {
 	if err := normalizeQuestionInput(&input); err != nil {
 		return err
 	}
-	row := Question{OwnerID: account.ID, Title: input.Title, Program: input.Program, Grade: input.Grade, Phase: input.Phase, Mode: input.Mode, Subject: input.Subject, Domain: input.Domain, Topic: input.Topic, Competency: input.Competency, CognitiveLevel: input.CognitiveLevel, Difficulty: input.Difficulty, Tags: input.Tags, Type: input.Type, Prompt: input.Prompt, Description: input.Description, StimulusJSON: input.StimulusJSON, ConfigJSON: input.ConfigJSON, AnswerJSON: input.AnswerJSON, RubricJSON: input.RubricJSON, InternalExplanation: input.InternalExplanation, Points: input.Points, Status: input.Status, Revision: 1}
+	if err := s.validateQuestionMediaOwner(account, input); err != nil {
+		return err
+	}
+	if input.Status == "published" {
+		return fiber.NewError(409, "Soal baru harus disimpan sebagai draf. Terbitkan soal melalui paket asesmen.")
+	}
+	if err := validateQuestionFolder(s.db, account, input.FolderID, ""); err != nil {
+		return err
+	}
+	row := Question{OwnerID: account.ID, FolderID: input.FolderID, Title: input.Title, Program: input.Program, Grade: input.Grade, Phase: input.Phase, Mode: input.Mode, Subject: input.Subject, Domain: input.Domain, Topic: input.Topic, Competency: input.Competency, CognitiveLevel: input.CognitiveLevel, Difficulty: input.Difficulty, EstimatedMinutes: input.EstimatedMinutes, Curriculum: input.Curriculum, Tags: input.Tags, Type: input.Type, Prompt: input.Prompt, Description: input.Description, StimulusJSON: input.StimulusJSON, ConfigJSON: input.ConfigJSON, AnswerJSON: input.AnswerJSON, RubricJSON: input.RubricJSON, InternalExplanation: input.InternalExplanation, Points: input.Points, Status: input.Status, Revision: 1}
 	if err := s.db.Create(&row).Error; err != nil {
 		return err
 	}
@@ -303,13 +471,6 @@ func (s *Server) createQuestion(c *fiber.Ctx) error {
 }
 func (s *Server) updateQuestion(c *fiber.Ctx) error {
 	account := currentAccount(c)
-	var row Question
-	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
-		return fiber.NewError(404, "Soal tidak ditemukan")
-	}
-	if !staffCanWrite(account, row.OwnerID) {
-		return fiber.NewError(403, "Anda tidak dapat mengubah soal ini")
-	}
 	var input questionInput
 	if err := c.BodyParser(&input); err != nil {
 		return fiber.NewError(400, "Data soal tidak valid")
@@ -317,14 +478,68 @@ func (s *Server) updateQuestion(c *fiber.Ctx) error {
 	if err := normalizeQuestionInput(&input); err != nil {
 		return err
 	}
-	row.Title, row.Program, row.Grade, row.Phase, row.Mode, row.Subject, row.Domain, row.Topic, row.Competency, row.CognitiveLevel, row.Difficulty, row.Tags = input.Title, input.Program, input.Grade, input.Phase, input.Mode, input.Subject, input.Domain, input.Topic, input.Competency, input.CognitiveLevel, input.Difficulty, input.Tags
-	row.Type, row.Prompt, row.Description, row.StimulusJSON, row.ConfigJSON, row.AnswerJSON, row.RubricJSON, row.InternalExplanation, row.Points, row.Status = input.Type, input.Prompt, input.Description, input.StimulusJSON, input.ConfigJSON, input.AnswerJSON, input.RubricJSON, input.InternalExplanation, input.Points, input.Status
-	row.Revision++
-	if err := s.db.Save(&row).Error; err != nil {
+	if err := s.validateQuestionMediaOwner(account, input); err != nil {
 		return err
 	}
-	s.audit(account.ID, "update_question", row.ID)
-	return c.JSON(row)
+	if input.Status == "published" {
+		return fiber.NewError(409, "Soal diterbitkan melalui paket asesmen dan tidak dapat diterbitkan langsung.")
+	}
+	var updated Question
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var row Question
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, "id = ?", c.Params("id")).Error; err != nil {
+			return fiber.NewError(404, "Soal tidak ditemukan")
+		}
+		if !staffCanWrite(account, row.OwnerID) {
+			return fiber.NewError(403, "Anda tidak dapat mengubah soal ini")
+		}
+		if row.TrashedAt != nil || row.ArchivedAt != nil {
+			return fiber.NewError(409, "Soal yang diarsipkan atau berada di Trash tidak dapat diedit. Pulihkan terlebih dahulu.")
+		}
+		if err := editableQuestionStatus(row.Status); err != nil {
+			return err
+		}
+		if input.Revision > 0 && input.Revision != row.Revision {
+			return fiber.NewError(409, "Soal telah berubah di sesi lain. Muat ulang sebelum menyimpan.")
+		}
+		if err := validateQuestionFolder(tx, account, input.FolderID, row.OwnerID); err != nil {
+			return err
+		}
+		if err := tx.Create(&QuestionVersion{QuestionID: row.ID, Revision: row.Revision, ChangedBy: account.ID, SnapshotJSON: questionSnapshotJSON(row)}).Error; err != nil {
+			return err
+		}
+		applyQuestionInput(&row, input)
+		row.Revision++
+		if err := tx.Save(&row).Error; err != nil {
+			return err
+		}
+		updated = row
+		return nil
+	}); err != nil {
+		return err
+	}
+	s.audit(account.ID, "update_question", updated.ID)
+	return c.JSON(updated)
+}
+
+func (s *Server) createQuestionRevision(c *fiber.Ctx) error {
+	account := currentAccount(c)
+	var source Question
+	if err := s.db.First(&source, "id = ?", c.Params("id")).Error; err != nil {
+		return fiber.NewError(404, "Soal tidak ditemukan")
+	}
+	if !staffCanWrite(account, source.OwnerID) {
+		return fiber.NewError(403, "Anda tidak dapat membuat revisi soal ini")
+	}
+	if source.Status != "published" || source.TrashedAt != nil || source.ArchivedAt != nil {
+		return fiber.NewError(409, "Revisi hanya dapat dibuat dari soal terbit yang masih aktif")
+	}
+	revision := draftQuestionRevision(source)
+	if err := s.db.Create(&revision).Error; err != nil {
+		return err
+	}
+	s.audit(account.ID, "create_question_revision", revision.ID)
+	return c.Status(201).JSON(revision)
 }
 func (s *Server) archiveQuestion(c *fiber.Ctx) error {
 	account := currentAccount(c)
@@ -335,8 +550,17 @@ func (s *Server) archiveQuestion(c *fiber.Ctx) error {
 	if !staffCanWrite(account, row.OwnerID) {
 		return fiber.NewError(403, "Anda tidak dapat menghapus soal ini")
 	}
+	if row.TrashedAt != nil {
+		return fiber.NewError(409, "Soal berada di Trash")
+	}
+	if row.ArchivedAt != nil {
+		return fiber.NewError(409, "Soal sudah diarsipkan")
+	}
 	now := time.Now()
-	if err := s.db.Model(&row).Update("archived_at", now).Error; err != nil {
+	row.ArchivedFromStatus = row.Status
+	row.Status = "archived"
+	row.ArchivedAt = &now
+	if err := s.db.Save(&row).Error; err != nil {
 		return err
 	}
 	s.audit(account.ID, "archive_question", row.ID)
@@ -344,7 +568,8 @@ func (s *Server) archiveQuestion(c *fiber.Ctx) error {
 }
 
 type assessmentInput struct {
-	Kind, Title, Description, ClassID, SubjectID, Status, AccessCode          string
+	Kind, Title, Description, ClassID, Room, SubjectID, Status                string
+	AccessCode                                                                *string `json:"accessCode"`
 	Instructions, ResultsPolicy, ConfirmationMessage, ThemeJSON, SectionsJSON string
 	DurationMinute                                                            int
 	MaxAttempts                                                               int
@@ -378,14 +603,17 @@ func validAssessmentInput(in *assessmentInput) error {
 	if in.ResultsPolicy != "" && in.ResultsPolicy != "immediate" && in.ResultsPolicy != "after_review" && in.ResultsPolicy != "hidden" {
 		return fiber.NewError(400, "Kebijakan hasil tidak valid")
 	}
-	if in.EndsAt != nil && in.StartsAt != nil && !in.EndsAt.After(*in.StartsAt) {
-		return fiber.NewError(400, "Jadwal selesai harus setelah jadwal mulai")
+	return validAssessmentSchedule(in.StartsAt, in.EndsAt)
+}
+func validAssessmentSchedule(startsAt, endsAt *time.Time) error {
+	if startsAt != nil && endsAt != nil && !endsAt.After(*startsAt) {
+		return fiber.NewError(400, "Tanggal selesai harus setelah tanggal mulai")
 	}
 	return nil
 }
 func (s *Server) listAssessments(c *fiber.Ctx) error {
 	account := currentAccount(c)
-	query := s.db.Model(&Assessment{})
+	query := s.db.Model(&Assessment{}).Where("trashed_at IS NULL")
 	if account.Role == "guru" {
 		query = query.Where("owner_id = ?", account.ID)
 	}
@@ -411,11 +639,14 @@ func (s *Server) createAssessment(c *fiber.Ctx) error {
 	if status == "" {
 		status = "draft"
 	}
-	row := Assessment{OwnerID: account.ID, Kind: input.Kind, Title: strings.TrimSpace(input.Title), Description: input.Description, Instructions: input.Instructions, ClassID: input.ClassID, SubjectID: input.SubjectID, Status: status, DurationMinute: input.DurationMinute, StartsAt: input.StartsAt, EndsAt: input.EndsAt, Randomize: input.Randomize, ShowResult: input.ShowResult, MaxAttempts: input.MaxAttempts, PassScore: input.PassScore, ResultsPolicy: input.ResultsPolicy, ShowReview: input.ShowReview, RandomizeOptions: input.RandomizeOptions, ProgressBar: input.ProgressBar, ConfirmationMessage: input.ConfirmationMessage, ThemeJSON: input.ThemeJSON, SectionsJSON: input.SectionsJSON, Revision: 1}
-	if input.AccessCode != "" {
-		row.AccessCodeHash = hash(input.AccessCode)
+	row := Assessment{OwnerID: account.ID, Kind: input.Kind, Title: strings.TrimSpace(input.Title), Description: input.Description, Instructions: input.Instructions, ClassID: input.ClassID, Room: strings.TrimSpace(input.Room), SubjectID: input.SubjectID, Status: status, DurationMinute: input.DurationMinute, StartsAt: input.StartsAt, EndsAt: input.EndsAt, Randomize: input.Randomize, ShowResult: input.ShowResult, MaxAttempts: input.MaxAttempts, PassScore: input.PassScore, ResultsPolicy: input.ResultsPolicy, ShowReview: input.ShowReview, RandomizeOptions: input.RandomizeOptions, ProgressBar: input.ProgressBar, ConfirmationMessage: input.ConfirmationMessage, ThemeJSON: input.ThemeJSON, SectionsJSON: input.SectionsJSON, Revision: 1}
+	if err := s.setAssessmentAccessCode(&row, input.AccessCode); err != nil {
+		return err
 	}
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.validatePublishedSchedule(tx, row); err != nil {
+			return err
+		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -437,6 +668,9 @@ func (s *Server) createAssessmentDraft(c *fiber.Ctx) error {
 	if c.BodyParser(&input) != nil {
 		return fiber.NewError(400, "Draf asesmen tidak valid")
 	}
+	if err := validAssessmentSchedule(input.StartsAt, input.EndsAt); err != nil {
+		return err
+	}
 	if input.Kind == "" {
 		input.Kind = "ujian_online"
 	}
@@ -453,9 +687,9 @@ func (s *Server) createAssessmentDraft(c *fiber.Ctx) error {
 	if title == "" {
 		title = "Paket tanpa judul"
 	}
-	row := Assessment{OwnerID: account.ID, Kind: input.Kind, Title: title, Description: input.Description, Instructions: input.Instructions, ClassID: input.ClassID, SubjectID: input.SubjectID, Status: "draft", DurationMinute: input.DurationMinute, StartsAt: input.StartsAt, EndsAt: input.EndsAt, Randomize: input.Randomize, ShowResult: input.ShowResult, MaxAttempts: input.MaxAttempts, PassScore: input.PassScore, ResultsPolicy: input.ResultsPolicy, ShowReview: input.ShowReview, RandomizeOptions: input.RandomizeOptions, ProgressBar: input.ProgressBar, ConfirmationMessage: input.ConfirmationMessage, ThemeJSON: input.ThemeJSON, SectionsJSON: input.SectionsJSON, Revision: 1}
-	if input.AccessCode != "" {
-		row.AccessCodeHash = hash(input.AccessCode)
+	row := Assessment{OwnerID: account.ID, Kind: input.Kind, Title: title, Description: input.Description, Instructions: input.Instructions, ClassID: input.ClassID, Room: strings.TrimSpace(input.Room), SubjectID: input.SubjectID, Status: "draft", DurationMinute: input.DurationMinute, StartsAt: input.StartsAt, EndsAt: input.EndsAt, Randomize: input.Randomize, ShowResult: input.ShowResult, MaxAttempts: input.MaxAttempts, PassScore: input.PassScore, ResultsPolicy: input.ResultsPolicy, ShowReview: input.ShowReview, RandomizeOptions: input.RandomizeOptions, ProgressBar: input.ProgressBar, ConfirmationMessage: input.ConfirmationMessage, ThemeJSON: input.ThemeJSON, SectionsJSON: input.SectionsJSON, Revision: 1}
+	if err := s.setAssessmentAccessCode(&row, input.AccessCode); err != nil {
+		return err
 	}
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {
@@ -478,6 +712,9 @@ func (s *Server) saveAssessmentDraft(c *fiber.Ctx) error {
 	if !staffCanWrite(account, row.OwnerID) || row.Status != "draft" {
 		return fiber.NewError(403, "Draf hanya dapat diubah oleh pemiliknya")
 	}
+	if row.TrashedAt != nil || row.Status == "archived" {
+		return fiber.NewError(409, "Paket diarsipkan atau berada di Trash; pulihkan sebelum mengedit")
+	}
 	var attempts int64
 	if err := s.db.Model(&Attempt{}).Where("assessment_id = ?", row.ID).Count(&attempts).Error; err != nil {
 		return err
@@ -494,6 +731,9 @@ func (s *Server) saveAssessmentDraft(c *fiber.Ctx) error {
 		_ = s.db.Where("assessment_id = ?", row.ID).Order("position").Find(&items).Error
 		return c.Status(409).JSON(fiber.Map{"error": "Draf berubah di sesi lain", "server": row, "items": items})
 	}
+	if err := validAssessmentSchedule(input.StartsAt, input.EndsAt); err != nil {
+		return err
+	}
 	if input.Kind != "ujian_online" && input.Kind != "simulasi" {
 		return fiber.NewError(400, "Jenis asesmen tidak valid")
 	}
@@ -503,7 +743,7 @@ func (s *Server) saveAssessmentDraft(c *fiber.Ctx) error {
 	if input.DurationMinute < 1 || input.DurationMinute > 1440 || input.MaxAttempts < 0 || input.MaxAttempts > 20 || input.PassScore < 0 || input.PassScore > 100 {
 		return fiber.NewError(400, "Durasi, batas percobaan, atau nilai lulus tidak valid")
 	}
-	row.Kind, row.Title, row.Description, row.Instructions, row.ClassID, row.SubjectID = input.Kind, strings.TrimSpace(input.Title), input.Description, input.Instructions, input.ClassID, input.SubjectID
+	row.Kind, row.Title, row.Description, row.Instructions, row.ClassID, row.Room, row.SubjectID = input.Kind, strings.TrimSpace(input.Title), input.Description, input.Instructions, input.ClassID, strings.TrimSpace(input.Room), input.SubjectID
 	if row.Title == "" {
 		row.Title = "Paket tanpa judul"
 	}
@@ -511,8 +751,8 @@ func (s *Server) saveAssessmentDraft(c *fiber.Ctx) error {
 	row.Randomize, row.ShowResult, row.MaxAttempts, row.PassScore = input.Randomize, input.ShowResult, input.MaxAttempts, input.PassScore
 	row.ResultsPolicy, row.ShowReview, row.RandomizeOptions, row.ProgressBar = input.ResultsPolicy, input.ShowReview, input.RandomizeOptions, input.ProgressBar
 	row.ConfirmationMessage, row.ThemeJSON, row.SectionsJSON = input.ConfirmationMessage, input.ThemeJSON, input.SectionsJSON
-	if input.AccessCode != "" {
-		row.AccessCodeHash = hash(input.AccessCode)
+	if err := s.setAssessmentAccessCode(&row, input.AccessCode); err != nil {
+		return err
 	}
 	row.Revision++
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -550,13 +790,13 @@ func (s *Server) replaceItemsTx(tx *gorm.DB, assessment Assessment, inputs []str
 		}
 		seen[item.QuestionID] = true
 		var question Question
-		if err := tx.First(&question, "id = ? AND archived_at IS NULL", item.QuestionID).Error; err != nil {
+		if err := tx.First(&question, "id = ? AND archived_at IS NULL AND trashed_at IS NULL", item.QuestionID).Error; err != nil {
 			return fiber.NewError(400, "Soal pilihan tidak ditemukan")
 		}
 		if account.Role == "guru" && question.OwnerID != account.ID {
 			return fiber.NewError(403, "Guru hanya dapat memakai soal miliknya")
 		}
-		snapshot, _ := json.Marshal(questionSnapshot{ID: question.ID, Title: question.Title, Program: question.Program, Grade: question.Grade, Phase: question.Phase, Mode: question.Mode, Subject: question.Subject, Domain: question.Domain, Topic: question.Topic, Competency: question.Competency, CognitiveLevel: question.CognitiveLevel, Difficulty: question.Difficulty, Tags: question.Tags, Type: question.Type, Prompt: question.Prompt, Description: question.Description, StimulusJSON: question.StimulusJSON, ConfigJSON: question.ConfigJSON, AnswerJSON: question.AnswerJSON, RubricJSON: question.RubricJSON, InternalExplanation: question.InternalExplanation, Points: question.Points})
+		snapshot, _ := json.Marshal(questionSnapshot{ID: question.ID, Title: question.Title, FolderID: question.FolderID, Program: question.Program, Grade: question.Grade, Phase: question.Phase, Mode: question.Mode, Subject: question.Subject, Domain: question.Domain, Topic: question.Topic, Competency: question.Competency, CognitiveLevel: question.CognitiveLevel, Difficulty: question.Difficulty, EstimatedMinutes: question.EstimatedMinutes, Curriculum: question.Curriculum, Tags: question.Tags, Type: question.Type, Prompt: question.Prompt, Description: question.Description, StimulusJSON: question.StimulusJSON, ConfigJSON: question.ConfigJSON, AnswerJSON: question.AnswerJSON, RubricJSON: question.RubricJSON, InternalExplanation: question.InternalExplanation, Points: question.Points, TemplatePlaceholder: question.TemplatePlaceholder})
 		weight := item.Weight
 		if weight <= 0 {
 			weight = question.Points
@@ -585,7 +825,7 @@ func (s *Server) replaceItemsTx(tx *gorm.DB, assessment Assessment, inputs []str
 func (s *Server) getAssessment(c *fiber.Ctx) error {
 	account := currentAccount(c)
 	var row Assessment
-	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+	if err := s.db.First(&row, "id = ? AND trashed_at IS NULL", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
 	if !staffCanWrite(account, row.OwnerID) && account.Role != "kepala_sekolah" {
@@ -595,16 +835,32 @@ func (s *Server) getAssessment(c *fiber.Ctx) error {
 	var assignments []AssessmentAssignment
 	_ = s.db.Where("assessment_id = ?", row.ID).Order("position").Find(&items).Error
 	_ = s.db.Where("assessment_id = ?", row.ID).Find(&assignments).Error
-	return c.JSON(fiber.Map{"assessment": row, "items": items, "assignments": assignments})
+	accessCode := ""
+	if account.Role != "kepala_sekolah" {
+		var err error
+		accessCode, err = decryptAssessmentCode(s.cfg.JWTSecret, row.AccessCodeCiphertext)
+		if err != nil {
+			return fiber.NewError(500, "Kode akses draf tidak dapat dibuka. Buat kode baru sebelum menerbitkan.")
+		}
+	}
+	assessment := struct {
+		Assessment
+		AccessCode           string `json:"accessCode,omitempty"`
+		AccessCodeConfigured bool   `json:"accessCodeConfigured"`
+	}{Assessment: row, AccessCode: accessCode, AccessCodeConfigured: row.AccessCodeHash != ""}
+	return c.JSON(fiber.Map{"assessment": assessment, "items": items, "assignments": assignments})
 }
 func (s *Server) updateAssessment(c *fiber.Ctx) error {
 	account := currentAccount(c)
 	var row Assessment
-	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
+	if err := s.db.First(&row, "id = ? AND trashed_at IS NULL", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
 	if !staffCanWrite(account, row.OwnerID) {
 		return fiber.NewError(403, "Akses ditolak")
+	}
+	if row.Status == "archived" {
+		return fiber.NewError(409, "Pulihkan paket dari arsip sebelum mengubahnya")
 	}
 	var attempts int64
 	_ = s.db.Model(&Attempt{}).Where("assessment_id = ?", row.ID).Count(&attempts).Error
@@ -618,17 +874,20 @@ func (s *Server) updateAssessment(c *fiber.Ctx) error {
 	if err := validAssessmentInput(&input); err != nil {
 		return err
 	}
-	row.Kind, row.Title, row.Description, row.Instructions, row.ClassID, row.SubjectID, row.DurationMinute, row.StartsAt, row.EndsAt, row.Randomize, row.ShowResult = input.Kind, input.Title, input.Description, input.Instructions, input.ClassID, input.SubjectID, input.DurationMinute, input.StartsAt, input.EndsAt, input.Randomize, input.ShowResult
+	row.Kind, row.Title, row.Description, row.Instructions, row.ClassID, row.Room, row.SubjectID, row.DurationMinute, row.StartsAt, row.EndsAt, row.Randomize, row.ShowResult = input.Kind, input.Title, input.Description, input.Instructions, input.ClassID, strings.TrimSpace(input.Room), input.SubjectID, input.DurationMinute, input.StartsAt, input.EndsAt, input.Randomize, input.ShowResult
 	row.MaxAttempts, row.PassScore, row.ResultsPolicy, row.ShowReview, row.RandomizeOptions, row.ProgressBar = input.MaxAttempts, input.PassScore, input.ResultsPolicy, input.ShowReview, input.RandomizeOptions, input.ProgressBar
 	row.ConfirmationMessage, row.ThemeJSON, row.SectionsJSON = input.ConfirmationMessage, input.ThemeJSON, input.SectionsJSON
 	if input.Status != "" {
 		row.Status = input.Status
 	}
-	if input.AccessCode != "" {
-		row.AccessCodeHash = hash(input.AccessCode)
+	if err := s.setAssessmentAccessCode(&row, input.AccessCode); err != nil {
+		return err
 	}
 	row.Revision++
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.validatePublishedSchedule(tx, row); err != nil {
+			return err
+		}
 		if err := tx.Save(&row).Error; err != nil {
 			return err
 		}
@@ -648,6 +907,9 @@ func (s *Server) publishAssessment(c *fiber.Ctx) error {
 	}
 	if !staffCanWrite(account, row.OwnerID) {
 		return fiber.NewError(403, "Akses ditolak")
+	}
+	if row.Status != "draft" || row.TrashedAt != nil {
+		return fiber.NewError(409, "Hanya paket draf yang dapat diterbitkan")
 	}
 	if strings.TrimSpace(row.Title) == "" || strings.EqualFold(strings.TrimSpace(row.Title), "Paket tanpa judul") {
 		return fiber.NewError(400, "Beri judul asesmen sebelum menerbitkan")
@@ -670,16 +932,61 @@ func (s *Server) publishAssessment(c *fiber.Ctx) error {
 	}
 	for index, item := range items {
 		var snapshot questionSnapshot
-		if json.Unmarshal([]byte(item.SnapshotJSON), &snapshot) != nil || !validQuestionForPublish(snapshot) || item.Weight <= 0 {
+		if json.Unmarshal([]byte(item.SnapshotJSON), &snapshot) != nil || snapshot.TemplatePlaceholder || !validQuestionForPublish(snapshot) || item.Weight <= 0 {
+			if snapshot.TemplatePlaceholder {
+				return fiber.NewError(400, fmt.Sprintf("Soal nomor %d masih berupa contoh template. Ganti teks dan lengkapi kunci atau rubrik sebelum menerbitkan.", index+1))
+			}
 			return fiber.NewError(400, fmt.Sprintf("Konfigurasi jawaban, bobot, atau rubrik soal nomor %d belum lengkap", index+1))
 		}
 	}
-	row.Status = "published"
-	row.Revision++
-	if err := s.db.Save(&row).Error; err != nil {
+	promotedQuestionIDs := make([]string, 0, len(items))
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var current Assessment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, "id = ?", row.ID).Error; err != nil {
+			return fiber.NewError(404, "Asesmen tidak ditemukan")
+		}
+		if !staffCanWrite(account, current.OwnerID) || current.Status != "draft" || current.TrashedAt != nil {
+			return fiber.NewError(409, "Asesmen berubah. Muat ulang draf sebelum menerbitkan.")
+		}
+		candidate := current
+		candidate.Status = "published"
+		if err := s.validatePublishedSchedule(tx, candidate); err != nil {
+			return err
+		}
+		for _, item := range items {
+			var source Question
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&source, "id = ?", item.QuestionID).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue // The immutable item snapshot remains publishable even if its bank row was removed.
+			}
+			if err != nil {
+				return err
+			}
+			if source.TrashedAt != nil || source.ArchivedAt != nil || source.Status == "published" {
+				continue
+			}
+			if err := tx.Create(&QuestionVersion{QuestionID: source.ID, Revision: source.Revision, ChangedBy: account.ID, SnapshotJSON: questionSnapshotJSON(source)}).Error; err != nil {
+				return err
+			}
+			source.Status = "published"
+			source.Revision++
+			if err := tx.Save(&source).Error; err != nil {
+				return err
+			}
+			promotedQuestionIDs = append(promotedQuestionIDs, source.ID)
+		}
+		current.Status = "published"
+		current.Revision++
+		return tx.Save(&current).Error
+	}); err != nil {
 		return err
 	}
 	s.audit(account.ID, "publish_assessment", row.ID)
+	for _, questionID := range promotedQuestionIDs {
+		s.audit(account.ID, "publish_question_source", questionID)
+	}
+	row.Status = "published"
+	row.Revision++
 	return c.JSON(row)
 }
 func (s *Server) reorderItems(c *fiber.Ctx) error {
@@ -688,7 +995,7 @@ func (s *Server) reorderItems(c *fiber.Ctx) error {
 	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, row.OwnerID) || row.Status != "draft" {
+	if !staffCanWrite(account, row.OwnerID) || row.Status != "draft" || row.TrashedAt != nil {
 		return fiber.NewError(403, "Urutan hanya dapat diubah oleh pemilik draft")
 	}
 	var input struct {
@@ -714,11 +1021,13 @@ func (s *Server) reorderItems(c *fiber.Ctx) error {
 }
 
 type questionSnapshot struct {
-	ID, Title, Type, Prompt, Description, ConfigJSON, AnswerJSON, RubricJSON                                        string
-	Program, Phase, Mode, Subject, Domain, Topic, Competency, CognitiveLevel, Difficulty, Tags, InternalExplanation string
-	Grade                                                                                                           int
-	StimulusJSON                                                                                                    string
-	Points                                                                                                          float64
+	ID, Title, Type, Prompt, Description, ConfigJSON, AnswerJSON, RubricJSON                                                              string
+	FolderID, Program, Phase, Mode, Subject, Domain, Topic, Competency, CognitiveLevel, Difficulty, Curriculum, Tags, InternalExplanation string
+	Grade                                                                                                                                 int
+	EstimatedMinutes                                                                                                                      int
+	StimulusJSON                                                                                                                          string
+	Points                                                                                                                                float64
+	TemplatePlaceholder                                                                                                                   bool
 }
 
 func (s *Server) publicExamLogin(c *fiber.Ctx) error {
@@ -740,7 +1049,7 @@ func (s *Server) publicExamLogin(c *fiber.Ctx) error {
 		_ = s.db.Create(&account).Error
 	}
 	var rows []Assessment
-	if err := s.db.Where("kind = ? AND class_id = ? AND status = ? AND access_code_hash = ?", "ujian_online", student.KelasID, "published", hash(strings.TrimSpace(input.AccessCode))).Find(&rows).Error; err != nil {
+	if err := s.db.Where("kind = ? AND class_id = ? AND status = ? AND trashed_at IS NULL AND access_code_hash = ?", "ujian_online", student.KelasID, "published", hash(strings.TrimSpace(input.AccessCode))).Find(&rows).Error; err != nil {
 		return err
 	}
 	token, _ := s.issueToken(account, 8*time.Hour)
@@ -767,7 +1076,7 @@ func (s *Server) studentAssessments(c *fiber.Ctx) error {
 		return fiber.NewError(403, "Profil siswa tidak aktif")
 	}
 	var candidates []Assessment
-	if err := s.db.Where("status = ?", "published").Order("starts_at asc nulls first, title asc").Find(&candidates).Error; err != nil {
+	if err := s.db.Where("status = ? AND trashed_at IS NULL", "published").Order("starts_at asc nulls first, title asc").Find(&candidates).Error; err != nil {
 		return err
 	}
 	rows := make([]Assessment, 0, len(candidates))
@@ -793,7 +1102,7 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 	var attempt Attempt
 	created := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&assessment, "id = ? AND status = ?", c.Params("id"), "published").Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&assessment, "id = ? AND status = ? AND trashed_at IS NULL", c.Params("id"), "published").Error; err != nil {
 			return fiber.NewError(404, "Asesmen tidak tersedia")
 		}
 		permitted, err := s.studentHasAssessmentAccess(student, assessment)
@@ -839,18 +1148,15 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 		if err := tx.Where("assessment_id = ?", assessment.ID).Order("position").Find(&items).Error; err != nil {
 			return err
 		}
+		var random *rand.Rand
 		if assessment.Randomize {
-			first, second := deterministicShuffleSeed(attempt.Seed, assessment.ID)
-			random := rand.New(rand.NewPCG(first, second))
-			random.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
-			if assessment.RandomizeOptions {
-				for index := range items {
-					items[index].SnapshotJSON = shuffleSnapshotOptions(items[index].SnapshotJSON, random)
-				}
+			items, random = shuffledAssessmentItems(items, attempt.Seed, assessment.ID)
+		}
+		if assessment.RandomizeOptions {
+			if random == nil {
+				first, second := deterministicShuffleSeed(attempt.Seed, assessment.ID)
+				random = rand.New(rand.NewPCG(first, second))
 			}
-		} else if assessment.RandomizeOptions {
-			first, second := deterministicShuffleSeed(attempt.Seed, assessment.ID)
-			random := rand.New(rand.NewPCG(first, second))
 			for index := range items {
 				items[index].SnapshotJSON = shuffleSnapshotOptions(items[index].SnapshotJSON, random)
 			}
@@ -1357,11 +1663,33 @@ func (s *Server) assessmentResults(c *fiber.Ctx) error {
 	if !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
 		return fiber.NewError(403, "Akses ditolak")
 	}
-	var attempts []Attempt
-	if err := s.db.Where("assessment_id = ?", assessment.ID).Order("started_at desc").Find(&attempts).Error; err != nil {
+	filters, err := parseResultFilters(c)
+	if err != nil {
 		return err
 	}
-	return c.JSON(attempts)
+	var attempts []Attempt
+	if err := filteredAttemptQuery(s.db, assessment.ID, filters).Order("started_at desc").Find(&attempts).Error; err != nil {
+		return err
+	}
+	studentIDs := make([]string, 0, len(attempts))
+	for _, attempt := range attempts {
+		studentIDs = append(studentIDs, attempt.StudentID)
+	}
+	var students []MasterPeserta
+	if len(studentIDs) > 0 {
+		if err := s.db.Where("id IN ?", studentIDs).Find(&students).Error; err != nil {
+			return err
+		}
+	}
+	names := make(map[string]string, len(students))
+	for _, student := range students {
+		names[student.ID] = student.Nama
+	}
+	output := make([]fiber.Map, 0, len(attempts))
+	for _, attempt := range attempts {
+		output = append(output, fiber.Map{"id": attempt.ID, "assessmentId": attempt.AssessmentID, "studentId": attempt.StudentID, "studentName": names[attempt.StudentID], "classIdAtAttempt": attempt.ClassIDAtAttempt, "number": attempt.Number, "status": attempt.Status, "score": attempt.Score, "needsManual": attempt.NeedsManual, "startedAt": attempt.StartedAt, "submittedAt": attempt.SubmittedAt, "deadlineAt": attempt.DeadlineAt})
+	}
+	return c.JSON(output)
 }
 
 func (s *Server) staffAttemptDetail(c *fiber.Ctx) error {
@@ -1408,41 +1736,7 @@ func (s *Server) staffAttemptDetail(c *fiber.Ctx) error {
 }
 
 func (s *Server) exportAssessmentResultsCSV(c *fiber.Ctx) error {
-	account := currentAccount(c)
-	var assessment Assessment
-	if err := s.db.First(&assessment, "id = ?", c.Params("id")).Error; err != nil {
-		return fiber.NewError(404, "Asesmen tidak ditemukan")
-	}
-	if !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
-		return fiber.NewError(403, "Akses ditolak")
-	}
-	var attempts []Attempt
-	if err := s.db.Where("assessment_id = ?", assessment.ID).Order("started_at asc").Find(&attempts).Error; err != nil {
-		return err
-	}
-	var output bytes.Buffer
-	writer := csv.NewWriter(&output)
-	_ = writer.Write([]string{"ID Percobaan", "ID Siswa", "Nama Siswa", "Kelas Saat Ujian", "Status", "Nilai", "Perlu Penilaian Manual", "Mulai", "Kirim"})
-	for _, attempt := range attempts {
-		var student MasterPeserta
-		_ = s.db.First(&student, "id = ?", attempt.StudentID).Error
-		started, submitted := "", ""
-		if attempt.StartedAt != nil {
-			started = attempt.StartedAt.Format(time.RFC3339)
-		}
-		if attempt.SubmittedAt != nil {
-			submitted = attempt.SubmittedAt.Format(time.RFC3339)
-		}
-		_ = writer.Write([]string{attempt.ID, attempt.StudentID, student.Nama, attempt.ClassIDAtAttempt, attempt.Status, strconv.FormatFloat(attempt.Score, 'f', 2, 64), strconv.FormatBool(attempt.NeedsManual), started, submitted})
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		return err
-	}
-	fileName := strings.NewReplacer("/", "-", "\\", "-").Replace(assessment.Title)
-	c.Set(fiber.HeaderContentType, "text/csv; charset=utf-8")
-	c.Set(fiber.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", fileName+"-hasil.csv"))
-	return c.Send(output.Bytes())
+	return s.exportAssessmentReport(c, "csv")
 }
 
 func (s *Server) gradeAnswer(c *fiber.Ctx) error {
@@ -1540,6 +1834,55 @@ func (s *Server) listClasses(c *fiber.Ctx) error {
 	}
 	return c.JSON(rows)
 }
+
+// createManualClassLabel is a temporary recovery path for LMS integrations that
+// have synced active students but have not synced their class metadata yet. It
+// only creates a label for an existing source class ID and never invents a
+// class without a verified active student roster. The next successful LMS sync
+// replaces this fallback with the authoritative class record.
+func (s *Server) createManualClassLabel(c *fiber.Ctx) error {
+	account := currentAccount(c)
+	if account.Role == "kepala_sekolah" {
+		return fiber.NewError(fiber.StatusForbidden, "Kepala sekolah hanya dapat melihat")
+	}
+	var input struct {
+		ClassID string `json:"classId"`
+		Name    string `json:"name"`
+	}
+	if c.BodyParser(&input) != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Data kelas manual tidak valid")
+	}
+	input.ClassID = strings.TrimSpace(input.ClassID)
+	input.Name = strings.TrimSpace(input.Name)
+	if input.ClassID == "" || len(input.ClassID) > 128 || input.Name == "" || len([]rune(input.Name)) > 100 {
+		return fiber.NewError(fiber.StatusBadRequest, "Pilih kelas dari peserta tersinkron dan isi nama kelas (maksimal 100 karakter)")
+	}
+	var row MasterKelas
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var students int64
+		if err := tx.Model(&MasterPeserta{}).Where("kelas_id = ? AND active = ?", input.ClassID, true).Count(&students).Error; err != nil {
+			return err
+		}
+		if students == 0 {
+			return fiber.NewError(fiber.StatusConflict, "Kelas manual harus merujuk ke kelas dengan peserta aktif yang sudah tersinkron dari LMS")
+		}
+		err := tx.First(&row, "id = ?", input.ClassID).Error
+		if err == nil {
+			return fiber.NewError(fiber.StatusConflict, "Data kelas sudah tercatat. Sinkronkan ulang LMS untuk memperbarui daftar kelas")
+		}
+		if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		row = MasterKelas{Base: Base{ID: input.ClassID}, Nama: input.Name, Active: true, ManualFallback: true}
+		return tx.Create(&row).Error
+	})
+	if err != nil {
+		return err
+	}
+	s.audit(account.ID, "create_manual_class_label", row.ID)
+	return c.Status(fiber.StatusCreated).JSON(row)
+}
+
 func (s *Server) listAccounts(c *fiber.Ctx) error {
 	var rows []CBTAccount
 	if err := s.db.Order("username").Find(&rows).Error; err != nil {

@@ -1,0 +1,63 @@
+import { expect, test } from '@playwright/test'
+
+test('soal baru memiliki metadata bawaan yang bisa disesuaikan tutor', async ({ page }) => {
+  let saved: Record<string, unknown> | null = null
+  await page.route('**/api/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname.replace('/api', '')
+    const method = request.method()
+    const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
+    if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })
+    if (path === '/staff/questions' && method === 'GET') return json([])
+    if (path === '/staff/question-folders' && method === 'GET') return json([])
+    if (path === '/staff/questions' && method === 'POST') { saved = request.postDataJSON() as Record<string, unknown>; return json({ ...saved, id: 'q-new', status: 'draft' }, 201) }
+    if (path === '/staff/trash' && method === 'GET') return json({ questions: [], assessments: [] })
+    if (path === '/staff/archive' && method === 'GET') return json({ questions: [], assessments: [] })
+    return json({ error: `Unmocked request: ${method} ${path}` }, 500)
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Tutor / Admin' }).click()
+  await page.getByLabel('Username CBT').fill('tutor')
+  await page.getByLabel('Kata sandi').fill('secret')
+  await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
+  await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('button', { name: 'Buat soal' }).click()
+  await page.getByRole('button', { name: 'Pengaturan lengkap' }).click()
+  await expect(page.getByLabel('Estimasi waktu (menit)')).toHaveValue('2')
+  await expect(page.getByLabel('Tag kurikulum / Capaian Pembelajaran')).toHaveValue('Belum dipetakan')
+  await page.getByLabel('Estimasi waktu (menit)').fill('4')
+  await page.getByLabel('Tag kurikulum / Capaian Pembelajaran').fill('CP Matematika Fase C')
+  await page.getByRole('button', { name: 'Simpan soal' }).click()
+  await expect.poll(() => saved).not.toBeNull()
+  expect(saved?.difficulty).toBe('sedang')
+  expect(saved?.estimatedMinutes).toBe(4)
+  expect(saved?.curriculum).toBe('CP Matematika Fase C')
+})
+
+test('tindakan pelengkapan massal hanya meminta default dan melaporkan soal terbit yang dilindungi', async ({ page }) => {
+  let bulkFilled = false
+  await page.route('**/api/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname.replace('/api', '')
+    const method = request.method()
+    const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
+    if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })
+    if (path === '/staff/questions' && method === 'GET') return json([])
+    if (path === '/staff/question-folders' && method === 'GET') return json([])
+    if (path === '/staff/questions/metadata-defaults' && method === 'POST') { bulkFilled = true; return json({ updatedCount: 8, publishedNeedsRevision: 2 }) }
+    if (path === '/staff/trash' && method === 'GET') return json({ questions: [], assessments: [] })
+    if (path === '/staff/archive' && method === 'GET') return json({ questions: [], assessments: [] })
+    return json({ error: `Unmocked request: ${method} ${path}` }, 500)
+  })
+  page.on('dialog', (dialog) => dialog.accept())
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Tutor / Admin' }).click()
+  await page.getByLabel('Username CBT').fill('tutor')
+  await page.getByLabel('Kata sandi').fill('secret')
+  await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
+  await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('button', { name: 'Isi nilai bawaan pada draf' }).click()
+  await expect.poll(() => bulkFilled).toBe(true)
+  await expect(page.getByText(/8 soal draf dilengkapi/)).toBeVisible()
+  await expect(page.getByText(/2 soal terbit tetap aman/)).toBeVisible()
+})

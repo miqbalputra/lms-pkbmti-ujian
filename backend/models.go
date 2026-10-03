@@ -38,6 +38,7 @@ type MasterKelas struct {
 	Nama            string `json:"nama"`
 	Jenjang         int    `json:"jenjang"`
 	Active          bool   `gorm:"index;default:true" json:"active"`
+	ManualFallback  bool   `gorm:"index;default:false" json:"manualFallback"`
 	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
 }
 type MasterPeserta struct {
@@ -65,6 +66,8 @@ type MasterMapel struct {
 type Question struct {
 	Base
 	OwnerID             string     `gorm:"index" json:"ownerId"`
+	FolderID            string     `gorm:"index" json:"folderId,omitempty"`
+	UsedCount           int64      `gorm:"-" json:"usedCount"`
 	Title               string     `json:"title"`
 	Program             string     `gorm:"index" json:"program,omitempty"`
 	Grade               int        `gorm:"index" json:"grade"`
@@ -76,6 +79,8 @@ type Question struct {
 	Competency          string     `json:"competency,omitempty"`
 	CognitiveLevel      string     `json:"cognitiveLevel,omitempty"`
 	Difficulty          string     `json:"difficulty,omitempty"`
+	EstimatedMinutes    int        `gorm:"not null;default:0" json:"estimatedMinutes"`
+	Curriculum          string     `gorm:"size:120" json:"curriculum,omitempty"`
 	Tags                string     `gorm:"type:text" json:"tags,omitempty"`
 	Type                string     `gorm:"index" json:"type"`
 	Prompt              string     `gorm:"type:text" json:"prompt"`
@@ -87,36 +92,74 @@ type Question struct {
 	InternalExplanation string     `gorm:"type:text" json:"internalExplanation,omitempty"`
 	Points              float64    `json:"points"`
 	Status              string     `gorm:"index" json:"status"`
+	TemplatePlaceholder bool       `gorm:"index;not null;default:false" json:"templatePlaceholder,omitempty"`
 	Revision            int        `json:"revision"`
 	ArchivedAt          *time.Time `json:"archivedAt,omitempty"`
+	ArchivedFromStatus  string     `json:"-"`
+	TrashedAt           *time.Time `json:"trashedAt,omitempty"`
+}
+
+// QuestionFolder groups reusable questions without owning or deleting them.
+// ParentID supports a subject folder with topic folders below it.
+type QuestionFolder struct {
+	Base
+	OwnerID  string `gorm:"index;not null" json:"ownerId"`
+	Name     string `gorm:"size:100;not null" json:"name"`
+	Subject  string `gorm:"size:120;index" json:"subject,omitempty"`
+	ParentID string `gorm:"index" json:"parentId,omitempty"`
+}
+
+type QuestionVersion struct {
+	Base
+	QuestionID   string `gorm:"index;uniqueIndex:idx_question_revision" json:"questionId"`
+	Revision     int    `gorm:"uniqueIndex:idx_question_revision" json:"revision"`
+	ChangedBy    string `gorm:"index" json:"changedBy"`
+	SnapshotJSON string `gorm:"type:text" json:"snapshotJson"`
+}
+
+type QuestionMedia struct {
+	Base
+	OwnerID      string     `gorm:"index;not null" json:"ownerId"`
+	StoredName   string     `gorm:"uniqueIndex;not null" json:"-"`
+	OriginalName string     `json:"originalName"`
+	ContentType  string     `json:"contentType"`
+	Kind         string     `gorm:"index;not null" json:"kind"`
+	Size         int64      `json:"size"`
+	SHA256       string     `json:"sha256"`
+	DeletedAt    *time.Time `gorm:"index" json:"deletedAt,omitempty"`
 }
 
 type Assessment struct {
 	Base
-	OwnerID             string     `gorm:"index" json:"ownerId"`
-	Kind                string     `gorm:"index" json:"kind"`
-	Title               string     `json:"title"`
-	Description         string     `gorm:"type:text" json:"description"`
-	Instructions        string     `gorm:"type:text" json:"instructions,omitempty"`
-	ClassID             string     `gorm:"index" json:"classId"`
-	SubjectID           string     `gorm:"index" json:"subjectId"`
-	Status              string     `gorm:"index" json:"status"`
-	AccessCodeHash      string     `json:"-"`
-	DurationMinute      int        `json:"durationMinute"`
-	StartsAt            *time.Time `json:"startsAt,omitempty"`
-	EndsAt              *time.Time `json:"endsAt,omitempty"`
-	Randomize           bool       `json:"randomize"`
-	ShowResult          bool       `json:"showResult"`
-	MaxAttempts         int        `json:"maxAttempts"`
-	PassScore           float64    `json:"passScore"`
-	ResultsPolicy       string     `json:"resultsPolicy"`
-	ShowReview          bool       `json:"showReview"`
-	RandomizeOptions    bool       `json:"randomizeOptions"`
-	ProgressBar         bool       `json:"progressBar"`
-	ConfirmationMessage string     `gorm:"type:text" json:"confirmationMessage,omitempty"`
-	ThemeJSON           string     `gorm:"type:text" json:"themeJson,omitempty"`
-	SectionsJSON        string     `gorm:"type:text" json:"sectionsJson,omitempty"`
-	Revision            int        `json:"revision"`
+	OwnerID              string     `gorm:"index" json:"ownerId"`
+	Kind                 string     `gorm:"index" json:"kind"`
+	Title                string     `json:"title"`
+	Description          string     `gorm:"type:text" json:"description"`
+	Instructions         string     `gorm:"type:text" json:"instructions,omitempty"`
+	ClassID              string     `gorm:"index" json:"classId"`
+	Room                 string     `gorm:"size:120;index" json:"room,omitempty"`
+	SubjectID            string     `gorm:"index" json:"subjectId"`
+	Status               string     `gorm:"index" json:"status"`
+	ArchivedAt           *time.Time `json:"archivedAt,omitempty"`
+	ArchivedFromStatus   string     `json:"-"`
+	TrashedAt            *time.Time `json:"trashedAt,omitempty"`
+	AccessCodeHash       string     `json:"-"`
+	AccessCodeCiphertext string     `gorm:"type:text" json:"-"`
+	DurationMinute       int        `json:"durationMinute"`
+	StartsAt             *time.Time `json:"startsAt,omitempty"`
+	EndsAt               *time.Time `json:"endsAt,omitempty"`
+	Randomize            bool       `json:"randomize"`
+	ShowResult           bool       `json:"showResult"`
+	MaxAttempts          int        `json:"maxAttempts"`
+	PassScore            float64    `json:"passScore"`
+	ResultsPolicy        string     `json:"resultsPolicy"`
+	ShowReview           bool       `json:"showReview"`
+	RandomizeOptions     bool       `json:"randomizeOptions"`
+	ProgressBar          bool       `json:"progressBar"`
+	ConfirmationMessage  string     `gorm:"type:text" json:"confirmationMessage,omitempty"`
+	ThemeJSON            string     `gorm:"type:text" json:"themeJson,omitempty"`
+	SectionsJSON         string     `gorm:"type:text" json:"sectionsJson,omitempty"`
+	Revision             int        `json:"revision"`
 }
 
 type AssessmentItem struct {
@@ -215,6 +258,20 @@ type SyncState struct {
 	Key       string    `gorm:"primaryKey" json:"key"`
 	Value     string    `gorm:"type:text" json:"value"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+type SyncRun struct {
+	Base
+	Trigger      string     `gorm:"index" json:"trigger"`
+	Status       string     `gorm:"index" json:"status"`
+	StartedAt    time.Time  `json:"startedAt"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	Accounts     int        `json:"accounts"`
+	Classes      int        `json:"classes"`
+	Students     int        `json:"students"`
+	Tutors       int        `json:"tutors"`
+	Subjects     int        `json:"subjects"`
+	Message      string     `gorm:"type:text" json:"message,omitempty"`
+	ErrorDetails string     `gorm:"type:text" json:"-"`
 }
 type IntegrationNonce struct {
 	Nonce     string    `gorm:"primaryKey"`
