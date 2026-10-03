@@ -188,6 +188,16 @@ func main() {
 	staff.Post("/questions/:id/trash", s.trashQuestion)
 	staff.Post("/questions/:id/restore", s.restoreQuestion)
 	staff.Post("/questions/:id/unarchive", s.unarchiveQuestion)
+	staff.Get("/question-packages", s.listQuestionPackages)
+	staff.Post("/question-packages", s.createQuestionPackage)
+	staff.Get("/question-packages/:id", s.getQuestionPackage)
+	staff.Put("/question-packages/:id", s.updateQuestionPackage)
+	staff.Put("/question-packages/:id/assignments", s.updateQuestionPackageAssignments)
+	staff.Post("/question-packages/:id/questions", s.createQuestionInPackage)
+	staff.Post("/question-packages/:id/publish", s.publishQuestionPackage)
+	staff.Post("/question-packages/:id/archive", s.archiveQuestionPackage)
+	staff.Post("/question-packages/:id/unarchive", s.unarchiveQuestionPackage)
+	staff.Post("/question-packages/:id/duplicate", s.duplicateQuestionPackage)
 	staff.Get("/assessments", s.listAssessments)
 	staff.Get("/schedule", s.listAssessmentSchedule)
 	staff.Get("/assessments/:id/monitor", s.assessmentMonitor)
@@ -247,7 +257,7 @@ func apiError(c *fiber.Ctx, err error) error {
 	return c.Status(code).JSON(fiber.Map{"error": message})
 }
 func (s *Server) migrate() error {
-	return s.db.AutoMigrate(&CBTAccount{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
+	return s.db.AutoMigrate(&CBTAccount{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
 }
 func (s *Server) ensureAdmin() error {
 	var count int64
@@ -555,6 +565,9 @@ func (s *Server) archiveQuestion(c *fiber.Ctx) error {
 	}
 	if row.ArchivedAt != nil {
 		return fiber.NewError(409, "Soal sudah diarsipkan")
+	}
+	if row.PackageID != "" {
+		return fiber.NewError(409, "Keluarkan soal dari paket terlebih dahulu. Arsip paket tidak menghapus butir soal.")
 	}
 	now := time.Now()
 	row.ArchivedFromStatus = row.Status

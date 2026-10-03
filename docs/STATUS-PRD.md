@@ -59,7 +59,7 @@ Terakhir diperiksa: 3 Oktober 2026. Checklist ini mencatat bukti lokal yang suda
 - `go vet ./...` — lulus.
 - `npm run lint` (di `frontend/`) — lulus.
 - `npm run build` (di `frontend/`) — lulus.
-- `npm run test:e2e` (di `frontend/`) — 28/28 skenario Playwright lulus pada pengulangan terakhir. Seluruh alur staf memakai API mock; browser UI tidak membuktikan transaksi PostgreSQL atau integrasi LMS.
+- `npm run test:e2e` (di `frontend/`) — 31/31 skenario Playwright lulus pada pengulangan terakhir, termasuk paket soal/deep link, konversi paket ke draf asesmen, dan jalur tutor baru dari beranda hingga editor formulir. Seluruh alur staf memakai API mock; browser UI tidak membuktikan transaksi PostgreSQL atau integrasi LMS.
 - `git diff --check` — lulus; Git hanya memberi peringatan normal tentang normalisasi LF/CRLF.
 
 Gerbang PRD keseluruhan **belum lulus**: sinkronisasi LMS produksi, DB PostgreSQL disposable/staging, backup-restore nyata, uji beban 200 sesi, pilot usability, satu kelas 30 siswa dan rekonsiliasi ekspor, serta pembersihan record `[TEST]` melalui UI deployment belum diverifikasi. Tidak ada SQL DELETE yang dijalankan; jangan jalankan pembersihan data tanpa konfirmasi dan inspeksi target di UI.

@@ -23,6 +23,7 @@ test('pencarian Bank Soal menapis judul dan isi secara langsung', async ({ page 
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
   await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await expect(page.getByText('Siklus air', { exact: true })).toBeVisible()
   await page.getByLabel('Cari soal').fill('tanaman')
   await expect(page.getByText('Kebun sekolah', { exact: true })).toBeVisible()

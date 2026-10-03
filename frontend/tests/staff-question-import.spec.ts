@@ -26,6 +26,7 @@ test('tutor mengunduh template lalu mengimpor soal dengan laporan baris gagal', 
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
   await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await page.getByText('Impor soal dari CSV, Excel, atau Word').click()
   const examplePromise = page.waitForEvent('download')
   await page.getByRole('button', { name: 'Unduh contoh 20 soal' }).click()

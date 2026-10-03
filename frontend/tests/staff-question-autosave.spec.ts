@@ -19,6 +19,7 @@ test('draf soal tersimpan otomatis dan bisa dipulihkan setelah reload', async ({
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
   await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await page.getByRole('button', { name: 'Buat soal' }).click()
   await page.getByRole('button', { name: 'Mulai sederhana' }).click()
   await page.getByLabel('Judul soal (opsional)').fill('Daur air')
@@ -32,6 +33,7 @@ test('draf soal tersimpan otomatis dan bisa dipulihkan setelah reload', async ({
 
   await page.reload()
   await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await page.getByRole('button', { name: 'Buat soal' }).click()
   await page.getByRole('button', { name: 'Mulai sederhana' }).click()
   await expect(page.getByText('Draf lokal dipulihkan. Lanjutkan, lalu simpan ke Bank Soal.')).toBeVisible()

@@ -65,38 +65,66 @@ type MasterMapel struct {
 
 type Question struct {
 	Base
-	OwnerID             string     `gorm:"index" json:"ownerId"`
-	FolderID            string     `gorm:"index" json:"folderId,omitempty"`
-	UsedCount           int64      `gorm:"-" json:"usedCount"`
-	Title               string     `json:"title"`
-	Program             string     `gorm:"index" json:"program,omitempty"`
-	Grade               int        `gorm:"index" json:"grade"`
-	Phase               string     `json:"phase,omitempty"`
-	Mode                string     `gorm:"index" json:"mode,omitempty"`
-	Subject             string     `gorm:"index" json:"subject,omitempty"`
-	Domain              string     `json:"domain,omitempty"`
-	Topic               string     `json:"topic,omitempty"`
-	Competency          string     `json:"competency,omitempty"`
-	CognitiveLevel      string     `json:"cognitiveLevel,omitempty"`
-	Difficulty          string     `json:"difficulty,omitempty"`
-	EstimatedMinutes    int        `gorm:"not null;default:0" json:"estimatedMinutes"`
-	Curriculum          string     `gorm:"size:120" json:"curriculum,omitempty"`
-	Tags                string     `gorm:"type:text" json:"tags,omitempty"`
-	Type                string     `gorm:"index" json:"type"`
-	Prompt              string     `gorm:"type:text" json:"prompt"`
-	Description         string     `gorm:"type:text" json:"description"`
-	StimulusJSON        string     `gorm:"type:text" json:"stimulusJson,omitempty"`
-	ConfigJSON          string     `gorm:"type:text" json:"configJson"`
-	AnswerJSON          string     `gorm:"type:text" json:"answerJson"`
-	RubricJSON          string     `gorm:"type:text" json:"rubricJson,omitempty"`
-	InternalExplanation string     `gorm:"type:text" json:"internalExplanation,omitempty"`
-	Points              float64    `json:"points"`
-	Status              string     `gorm:"index" json:"status"`
-	TemplatePlaceholder bool       `gorm:"index;not null;default:false" json:"templatePlaceholder,omitempty"`
-	Revision            int        `json:"revision"`
-	ArchivedAt          *time.Time `json:"archivedAt,omitempty"`
-	ArchivedFromStatus  string     `json:"-"`
-	TrashedAt           *time.Time `json:"trashedAt,omitempty"`
+	OwnerID             string           `gorm:"index" json:"ownerId"`
+	PackageID           string           `gorm:"index:idx_question_package_order,priority:1" json:"packageId,omitempty"`
+	PackagePosition     int              `gorm:"index:idx_question_package_order,priority:2" json:"packagePosition,omitempty"`
+	Package             *QuestionPackage `gorm:"foreignKey:PackageID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	FolderID            string           `gorm:"index" json:"folderId,omitempty"`
+	UsedCount           int64            `gorm:"-" json:"usedCount"`
+	Title               string           `json:"title"`
+	Program             string           `gorm:"index" json:"program,omitempty"`
+	Grade               int              `gorm:"index" json:"grade"`
+	Phase               string           `json:"phase,omitempty"`
+	Mode                string           `gorm:"index" json:"mode,omitempty"`
+	Subject             string           `gorm:"index" json:"subject,omitempty"`
+	Domain              string           `json:"domain,omitempty"`
+	Topic               string           `json:"topic,omitempty"`
+	Competency          string           `json:"competency,omitempty"`
+	CognitiveLevel      string           `json:"cognitiveLevel,omitempty"`
+	Difficulty          string           `json:"difficulty,omitempty"`
+	EstimatedMinutes    int              `gorm:"not null;default:0" json:"estimatedMinutes"`
+	Curriculum          string           `gorm:"size:120" json:"curriculum,omitempty"`
+	Tags                string           `gorm:"type:text" json:"tags,omitempty"`
+	Type                string           `gorm:"index" json:"type"`
+	Prompt              string           `gorm:"type:text" json:"prompt"`
+	Description         string           `gorm:"type:text" json:"description"`
+	StimulusJSON        string           `gorm:"type:text" json:"stimulusJson,omitempty"`
+	ConfigJSON          string           `gorm:"type:text" json:"configJson"`
+	AnswerJSON          string           `gorm:"type:text" json:"answerJson"`
+	RubricJSON          string           `gorm:"type:text" json:"rubricJson,omitempty"`
+	InternalExplanation string           `gorm:"type:text" json:"internalExplanation,omitempty"`
+	Points              float64          `json:"points"`
+	Status              string           `gorm:"index" json:"status"`
+	TemplatePlaceholder bool             `gorm:"index;not null;default:false" json:"templatePlaceholder,omitempty"`
+	Revision            int              `json:"revision"`
+	ArchivedAt          *time.Time       `json:"archivedAt,omitempty"`
+	ArchivedFromStatus  string           `json:"-"`
+	TrashedAt           *time.Time       `json:"trashedAt,omitempty"`
+}
+
+// QuestionPackage groups reusable bank questions for a teacher-facing workflow.
+// It is separate from Assessment, which remains the immutable, runnable CBT exam.
+type QuestionPackage struct {
+	Base
+	OwnerID            string `gorm:"column:created_by;index;not null" json:"ownerId"`
+	Title              string `gorm:"size:160;not null;index" json:"title"`
+	Description        string `gorm:"type:text" json:"description,omitempty"`
+	Subject            string `gorm:"size:120;index" json:"subject,omitempty"`
+	Status             string `gorm:"size:20;index;not null;default:draft" json:"status"`
+	ArchivedFromStatus string `json:"-"`
+}
+
+// PackageAssignment supports either one class or explicit students. TargetType
+// and TargetID form the database-level uniqueness constraint; nullable target
+// columns keep the schema explicit for reporting and class filtering.
+type PackageAssignment struct {
+	Base
+	PackageID  string           `gorm:"uniqueIndex:idx_package_assignment_target,priority:1;index;not null" json:"packageId"`
+	Package    *QuestionPackage `gorm:"foreignKey:PackageID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	TargetType string           `gorm:"uniqueIndex:idx_package_assignment_target,priority:2;size:16;not null" json:"targetType"`
+	TargetID   string           `gorm:"uniqueIndex:idx_package_assignment_target,priority:3;size:100;not null" json:"targetId"`
+	ClassID    *string          `gorm:"index" json:"classId,omitempty"`
+	StudentID  *string          `gorm:"index" json:"studentId,omitempty"`
 }
 
 // QuestionFolder groups reusable questions without owning or deleting them.

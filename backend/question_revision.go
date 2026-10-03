@@ -19,6 +19,12 @@ func editableQuestionStatus(status string) error {
 
 func draftQuestionRevision(source Question) Question {
 	source.Base = Base{}
+	// A revision of a package question starts loose in the reusable bank. The
+	// published package remains an immutable grouping until the revision is
+	// explicitly selected into a new draft package.
+	source.PackageID = ""
+	source.PackagePosition = 0
+	source.Package = nil
 	source.Title = strings.TrimSpace(source.Title) + " (revisi)"
 	source.Status = "draft"
 	source.Revision = 1

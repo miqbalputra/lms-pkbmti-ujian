@@ -36,7 +36,7 @@ test('tutor dapat memberi label sementara pada kelas yang roster siswanya sudah 
 
   await loginAsTutor(page)
   await page.getByRole('button', { name: 'Ujian & Simulasi' }).click()
-  await page.getByRole('button', { name: /Mulai sederhana/ }).click()
+  await page.getByRole('button', { name: 'Buat formulir baru' }).click()
   await expect(page.getByText('LMS belum mengirim data kelas aktif.')).toBeVisible()
   await page.getByLabel('Pilih kelompok peserta tersinkron').selectOption('source-class-1')
   await page.getByLabel('Nama kelas (sementara)').fill('Paket B — Kelas 7')
@@ -64,7 +64,7 @@ test('tanpa roster siswa tersinkron, tutor diarahkan ke sinkronisasi dan kelas p
 
   await loginAsTutor(page)
   await page.getByRole('button', { name: 'Ujian & Simulasi' }).click()
-  await page.getByRole('button', { name: /Mulai sederhana/ }).click()
+  await page.getByRole('button', { name: 'Buat formulir baru' }).click()
   await expect(page.getByText('Belum ada peserta aktif dari LMS, jadi kelas manual tidak dapat dipetakan dengan aman.')).toBeVisible()
   await page.getByRole('button', { name: 'Buka sinkronisasi LMS' }).click()
   await expect(page.getByRole('heading', { name: 'Status sinkronisasi' })).toBeVisible()

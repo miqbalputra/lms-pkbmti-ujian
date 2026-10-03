@@ -39,6 +39,17 @@ func TestDraftQuestionRevisionPreservesContentWithoutChangingSourceIdentity(t *t
 	}
 }
 
+func TestQuestionRevisionStartsOutsidePublishedPackage(t *testing.T) {
+	source := Question{PackageID: "published-package", PackagePosition: 4, Status: "published", Title: "Pertanyaan", Revision: 3}
+	revision := draftQuestionRevision(source)
+	if revision.PackageID != "" || revision.PackagePosition != 0 {
+		t.Fatalf("revision must not mutate the published package: %#v", revision)
+	}
+	if source.PackageID != "published-package" || source.PackagePosition != 4 {
+		t.Fatalf("source package membership changed: %#v", source)
+	}
+}
+
 func TestRestoreQuestionContentKeepsCurrentIdentityAndDraftLifecycle(t *testing.T) {
 	current := Question{Base: Base{ID: "current-id"}, OwnerID: "current-owner", Status: "draft", Revision: 9, Title: "Newer title", Prompt: "Newer prompt"}
 	previous := Question{Base: Base{ID: "current-id"}, OwnerID: "old-owner", Status: "published", Revision: 3, Title: "Older title", Prompt: "Older prompt", AnswerJSON: `"a"`}

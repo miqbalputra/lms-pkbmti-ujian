@@ -27,6 +27,7 @@ test('riwayat soal menampilkan versi dan rollback membuat revisi baru', async ({
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
   await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await page.getByRole('button', { name: 'Riwayat versi' }).click()
   await expect(page.getByRole('dialog')).toContainText('Versi aktif 2')
   await expect(page.getByRole('dialog')).toContainText('Versi 1')

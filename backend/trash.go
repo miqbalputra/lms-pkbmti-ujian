@@ -65,6 +65,9 @@ func (s *Server) trashQuestion(c *fiber.Ctx) error {
 	if row.TrashedAt != nil {
 		return fiber.NewError(409, "Soal sudah berada di Trash")
 	}
+	if row.PackageID != "" {
+		return fiber.NewError(409, "Keluarkan soal dari paket terlebih dahulu. Soal paket tidak dihapus dari Bank Soal secara langsung.")
+	}
 	now := time.Now().UTC()
 	if err := s.db.Model(&row).Update("trashed_at", now).Error; err != nil {
 		return err

@@ -9,6 +9,8 @@ Dokumen ini memetakan implementasi di repo mandiri `lms-pkbmti-ujian` (bukan dat
 - **Operasi:** Dockerfile multi-stage di root, Compose untuk pengembangan, `/health` untuk health check, port aplikasi default 8080, volume unggahan `/app/uploads`. Variabel lokal dicontohkan di `.env.example`; jangan menyimpan secret di `VITE_*`.
 - **Lokal:** siapkan PostgreSQL terpisah, isi `.env` berdasarkan `.env.example`, lalu di root jalankan `go run ./backend`. Di terminal lain, `cd frontend`, `npm ci`, `npm run dev`. Tes backend: `go test ./...`, `go vet ./...`; frontend: `npm run lint`, `npm run build`, dan `npm run test:e2e` (server dan data uji harus tersedia). Aplikasi CBT tidak membuka koneksi database LMS.
 
+Untuk mengurangi kebingungan staf, beranda kini memulai dengan satu aksi utama dan peta tiga langkah (susun pertanyaan → pilih peserta → pratinjau/terbitkan). Navigasi dikelompokkan menjadi Mulai, Pantau & Nilai, serta Koneksi. Halaman asesmen menaruh pembuatan kosong sebagai jalur utama; pengaturan lengkap dan template ditempatkan sebagai pilihan lanjutan. Ini memakai pola yang familier dari pembuat formulir, tetapi bukan replika penuh Google Forms dan tetap mempertahankan kebutuhan CBT seperti penugasan kelas, kode akses, jadwal, identitas siswa, dan kebijakan nilai.
+
 ## Model data utama
 
 Semua tabel berikut dimigrasikan secara aditif lewat GORM `AutoMigrate` ketika backend start; tidak ada migrasi yang menulis ulang tabel LMS.
@@ -16,12 +18,14 @@ Semua tabel berikut dimigrasikan secara aditif lewat GORM `AutoMigrate` ketika b
 | Area | Model/tabel | Fungsi |
 |---|---|---|
 | Akun & master LMS | `CBTAccount`, `MasterKelas`, `MasterPeserta`, `MasterTutor`, `MasterMapel` | Akun lokal CBT dan salinan identitas/kelas/mapel dari LMS; `source_user_id` menjaga kaitan akun staf. Password LMS tidak disalin. Jika metadata kelas belum tersinkron tetapi roster siswa tersedia, staf dapat memberi label sementara pada ID kelas sumber yang sudah punya peserta aktif; sinkronisasi sukses berikutnya mengganti label tersebut dengan data resmi LMS. |
-| Bank soal | `Question`, `QuestionVersion` | Soal, konfigurasi tipe, kunci/rubrik internal, pemilik, revisi, status, arsip; snapshot tiap revisi terdahulu untuk riwayat/rollback tutor. |
+| Bank soal & Paket Soal | `Question`, `QuestionVersion`, `QuestionPackage`, `PackageAssignment` | Soal individual tetap menjadi butir reusable; Paket Soal mengelompokkan dan mengurutkan beberapa butir, dengan target kelas atau siswa. Kunci/rubrik internal, revisi, status, arsip, dan snapshot versi sebelumnya tetap melekat pada butir. Paket terbit dikunci; gunakan “Buat Ujian Online” atau “Buat Simulasi” untuk menyalin butir dan target yang kompatibel ke draf asesmen yang dapat dikerjakan siswa. |
 | Asesmen | `Assessment`, `AssessmentItem`, `AssessmentAssignment` | Paket Ujian Online/Simulasi, jadwal/kebijakan, ruang, urutan/bobot, snapshot soal, penugasan siswa. |
 | Pengerjaan & nilai | `Attempt`, `AttemptItem`, `Answer`, `AttemptAttachment`, `AttemptRecovery`, `AttemptAnswerRevision` | Percobaan dengan kelas saat ujian, urutan/seed, jawaban, lampiran, pemulihan, histori revisi. |
 | Operasional | `AuditLog`, `SyncState`, `IntegrationNonce`, `IntegrationOutbox`, `MigrationBatch` | Audit, cursor sinkronisasi, pencegahan replay, pengiriman hasil tertunda, serta batch impor legacy. |
 
 Snapshot di `AssessmentItem` menjaga isi soal yang diterbitkan tetap independen dari perubahan bank soal selanjutnya. Hasil dan attempt disimpan di PostgreSQL CBT; outbox mengirim replika hasil ke LMS.
+
+Workspace paket soal menggunakan rute langsung `/soal`, `/soal/paket/:id`, `/soal/paket/:id/edit`, dan `/soal/paket/:id/penugasan`. Pencarian/status/mapel/kelas/rentang tanggal berada di query URL agar dapat di-bookmark. Paket Soal adalah lapisan pengelompokan Bank Soal, bukan tabel attempt baru; siswa mengerjakan salinan draf Ujian Online atau Simulasi yang dibuat dari paket. Jika paket menargetkan lebih dari satu kelas, tutor memilih satu kelas pada builder karena satu asesmen CBT memiliki satu konteks kelas.
 
 Soal draf dapat diubah; perubahan signifikan merekam isi sebelumnya ke `QuestionVersion` di dalam transaksi yang sama. Soal berstatus terbit tidak dapat diperbarui langsung—tutor membuat record revisi draf baru. Pemulihan versi hanya berlaku untuk draf aktif, menyimpan kondisi aktif ke riwayat terlebih dahulu, dan menaikkan revision sehingga rollback pun dapat diaudit.
 
@@ -49,7 +53,7 @@ Apabila `/staff/master/classes` belum menghasilkan kelas tetapi `/staff/master/s
 
 ## Hasil verifikasi lokal terakhir
 
-- **Gerbang lokal terakhir (3 Oktober 2026):** `go test ./...`, `go vet ./...`, `npm run lint`, `npm run build`, dan `npm run test:e2e` (28 skenario Playwright lulus). Cakupan termasuk 15 template soal, autosave/recovery, revisi/riwayat, portal siswa, fallback kelas, trash/arsip, impor/media, folder/pencarian 500 soal, builder/jadwal/monitor live, sinkronisasi mock, analisis butir, filter/ekspor hasil. Semua alur E2E staf dan pengujian browser menggunakan API mock.
+- **Gerbang lokal terakhir (3 Oktober 2026):** `go test ./...`, `go vet ./...`, `npm run lint`, `npm run build`, dan `npm run test:e2e` (31 skenario Playwright lulus). Cakupan termasuk 15 template soal, autosave/recovery, revisi/riwayat, portal siswa, fallback kelas, trash/arsip, impor/media, folder/pencarian 500 soal, paket soal beserta tautan deep-link dan konversi ke draf asesmen, builder/jadwal/monitor live, sinkronisasi mock, analisis butir, filter/ekspor hasil, dan jalur onboarding tutor dari beranda sampai editor. Semua alur E2E staf dan pengujian browser menggunakan API mock.
 - **Belum terverifikasi end-to-end:** login lokal CBT sampai membuat soal melalui service PostgreSQL. Lingkungan kerja tidak memiliki Docker/`psql`/service PostgreSQL dan koneksi `127.0.0.1:5432` ditolak. Tes unit tidak membuktikan transaksi migrasi/jadwal/laporan pada PostgreSQL. Jangan memakai database production untuk uji ini.
 - **Catatan regresi:** `bug.md` sekarang tersedia di workspace utama. Pemetaan hasil reproduksi dan bukti untuk BUG-01–12 ada pada `docs/STATUS-PRD.md`. Seluruh tes staf memakai API mock; itu membuktikan perilaku UI, bukan penerimaan/perubahan pada deployment atau transaksi database produksi.
 - **Probe integrasi produksi baca-saja:** CBT `/health` menjawab HTTP 200, sedangkan endpoint master LMS tanpa kredensial menjawab HTTP 503. Handler LMS saat ini memiliki jalur 503 jika environment integrasi belum lengkap; sinkronisasi bertanda tangan yang nyata masih harus dijalankan setelah variabel Coolify kedua layanan dicocokkan.

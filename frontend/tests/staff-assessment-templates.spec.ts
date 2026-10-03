@@ -51,6 +51,7 @@ test('tutor membuat draf semester dari template dengan semua placeholder aman da
 
   const startedAt = Date.now()
   await signIn(page)
+  await page.getByText('Mulai lebih cepat dengan template (opsional)').click()
   const templateCard = page.getByRole('article').filter({ hasText: 'Ujian Semester' })
   await expect(templateCard).toContainText('40 pilihan ganda + 5 esai · 90 menit')
   await templateCard.getByRole('button', { name: 'Buat draf' }).click()

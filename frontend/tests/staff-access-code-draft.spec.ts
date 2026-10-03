@@ -34,7 +34,7 @@ test('kode akses tersimpan otomatis dan muncul kembali saat draf dibuka ulang', 
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
   await page.getByRole('button', { name: 'Ujian & Simulasi' }).click()
-  await page.getByRole('button', { name: /Mulai sederhana/ }).click()
+  await page.getByRole('button', { name: 'Buat formulir baru' }).click()
   const accessCode = page.getByLabel('Kode akses siswa')
   await accessCode.fill('KODE-TRYOUT-2026')
   await expect(page.getByText('Tersimpan otomatis')).toBeVisible()

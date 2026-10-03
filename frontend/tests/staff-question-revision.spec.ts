@@ -32,6 +32,7 @@ test('soal terbit dibuat revisinya sebagai draf tanpa mengubah sumber', async ({
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
   await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await expect(page.getByText('Soal terbit', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: 'Buat revisi', exact: true }).click()
