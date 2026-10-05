@@ -77,6 +77,7 @@ export function App() {
   const questionLibrary = new URLSearchParams(location.search).get('tab') === 'questions'
   const setTab = (next: string) => navigate(routePath(next))
   const logout = () => { saveSession(null); setSession(null); navigate('/', { replace: true }) }
+  if (location.pathname === '/sso/callback') return <SSOCallback onComplete={(next, nextPath) => { saveSession(next); setSession(next); navigate(nextPath, { replace: true }) }} />
   if (!session) return <Login onLogin={(next) => { saveSession(next); setSession(next) }} />
   if (session.user.role === 'siswa') return <Suspense fallback={<main className="min-h-screen bg-slate-50 p-4"><ScreenLoading label="Menyiapkan ruang asesmen…"/></main>}><StudentPortal session={session} onLogout={logout} /></Suspense>
   const nav: Array<[string, LucideIcon, string]> = [['dashboard', LayoutDashboard, 'Ringkasan'], ['questions', BookOpen, 'Bank Soal'], ['assessments', ClipboardList, 'Ujian & Simulasi'], ['schedule', CalendarDays, 'Jadwal'], ['monitor', Activity, 'Monitor live'], ['results', BarChart3, 'Hasil'], ['sync', Cloud, 'Sinkronisasi']]
@@ -97,6 +98,28 @@ export function App() {
       <main className="min-w-0 space-y-4"><NoticeBox notice={notice}/><Suspense fallback={<ScreenLoading label="Menyiapkan ruang kerja…"/>}>{tab === 'dashboard' && <Dashboard session={session} onNavigate={setTab}/>} {tab === 'questions' && (questionLibrary ? <QuestionLibrary session={session} notify={setNotice}/> : <QuestionPackages session={session} notify={setNotice}/>)} {tab === 'assessments' && <AssessmentBuilder session={session} notify={setNotice} onSync={() => setTab('sync')}/>} {tab === 'schedule' && <SchedulePanel session={session}/>} {tab === 'monitor' && <LiveMonitor session={session}/>} {tab === 'results' && <Results session={session}/>} {tab === 'sync' && <SyncPanel session={session} notify={setNotice}/>}</Suspense></main>
     </div>
   </div>
+}
+
+function SSOCallback({ onComplete }: { onComplete: (session: Session, nextPath: string) => void }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(true)
+  const started = useRef(false)
+  useEffect(() => {
+    if (started.current) return
+    started.current = true
+    const ticket = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('ticket') || ''
+    window.history.replaceState(null, '', '/sso/callback')
+    if (!ticket) {
+      setBusy(false)
+      setError('Tiket masuk tidak ditemukan. Mulai kembali melalui LMS.')
+      return
+    }
+    void api<Session & { nextPath?: string }>('/auth/sso/exchange', { method: 'POST', body: JSON.stringify({ ticket }) }, null)
+      .then((response) => onComplete({ accessToken: response.accessToken, user: response.user }, response.nextPath || '/'))
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Masuk melalui LMS gagal. Silakan coba kembali.'))
+      .finally(() => setBusy(false))
+  }, [onComplete])
+  return <main className="grid min-h-screen place-items-center bg-slate-50 p-4"><section className="w-full max-w-lg rounded-2xl border bg-white p-6 text-center shadow-sm"><div className={`mx-auto mb-4 size-8 rounded-full border-2 ${busy ? 'animate-spin border-brand border-t-transparent' : 'border-slate-200'}`} role="status" aria-label={busy ? 'Memverifikasi sesi LMS' : undefined}/><h1 className="text-xl font-bold">{busy ? 'Memverifikasi sesi LMS…' : error ? 'Belum dapat masuk' : 'Sesi CBT siap'}</h1><p className="mt-2 text-sm text-slate-600">Identitas dan hak akses diverifikasi oleh LMS. Password LMS tidak dikirim ke CBT.</p>{error && <div role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}<a href="/sso/start" className="mt-3 inline-block min-h-11 font-semibold underline">Mulai lagi melalui LMS</a></div>}</section></main>
 }
 
 function routeTab(pathname: string, _search: URLSearchParams) {
@@ -121,9 +144,18 @@ function routePath(tab: string) {
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [mode, setMode] = useState<'staff' | 'student' | 'student-account'>('student'); const [username, setUsername] = useState(''); const [password, setPassword] = useState(''); const [nisn, setNisn] = useState(''); const [accessCode, setAccessCode] = useState(''); const [error, setError] = useState(''); const [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState<'staff' | 'student' | 'student-account'>('student')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [nisn, setNisn] = useState('')
+  const [accessCode, setAccessCode] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setError('')
+    event.preventDefault()
+    setBusy(true)
+    setError('')
     try {
       if (mode !== 'student') {
         const next = await api<Session>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }, null)
@@ -134,11 +166,45 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
         const data = await api<{ accessToken: string; student: { id: string; nama: string } }>('/public/ujian-online/cek', { method: 'POST', body: JSON.stringify({ nisn, accessCode }) }, null)
         onLogin({ accessToken: data.accessToken, user: { id: data.student.id, username: nisn, nama: data.student.nama, role: 'siswa', pesertaDidikId: data.student.id } })
       }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Login gagal') }
-    finally { setBusy(false) }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Login gagal')
+    } finally {
+      setBusy(false)
+    }
   }
   const tab = (value: 'student' | 'student-account' | 'staff', label: string) => <button type="button" onClick={() => { setMode(value); setError('') }} className={`min-h-12 rounded-lg px-2 text-xs font-bold sm:text-sm ${mode === value ? 'bg-white text-brand shadow' : 'text-slate-500'}`}>{label}</button>
-  return <main className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top,#d9f4f4,#f8fafc_46%)] p-4"><Card className="w-full max-w-md overflow-hidden"><div className="bg-brand p-7 text-white"><div className="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-white/15"><GraduationCap/></div><p className="text-sm font-bold uppercase tracking-wider text-cyan-100">PKBM Tunas Ilmu</p><h1 className="mt-1 text-2xl font-bold">CBT & Asesmen</h1><p className="mt-2 text-sm text-cyan-50">Ruang aman untuk mengerjakan dan mengelola asesmen.</p></div><form onSubmit={submit} className="space-y-4 p-5 sm:p-6"><div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1">{tab('student', 'NISN + kode')}{tab('student-account', 'Akun siswa')}{tab('staff', 'Tutor / Admin')}</div>{mode === 'student' ? <><Field label="NISN"><input required value={nisn} onChange={(e) => setNisn(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Masukkan NISN" autoComplete="username"/></Field><Field label="Kode akses ujian"><input required value={accessCode} onChange={(e) => setAccessCode(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Diberikan tutor" autoComplete="one-time-code"/></Field></> : <><Field label={mode === 'student-account' ? 'Username siswa' : 'Username CBT'}><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field><Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field></>} {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<Button type="submit" className="w-full" disabled={busy}>{busy ? 'Memeriksa…' : mode === 'student' ? 'Lihat ujian' : mode === 'student-account' ? 'Masuk sebagai siswa' : 'Masuk ke workspace'}</Button></form></Card></main>
+
+  return <main className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top,#d9f4f4,#f8fafc_46%)] p-4">
+    <Card className="w-full max-w-md overflow-hidden">
+      <div className="bg-brand p-7 text-white">
+        <div className="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-white/15"><GraduationCap/></div>
+        <p className="text-sm font-bold uppercase tracking-wider text-cyan-100">PKBM Tunas Ilmu</p>
+        <h1 className="mt-1 text-2xl font-bold">CBT & Asesmen</h1>
+        <p className="mt-2 text-sm text-cyan-50">Ruang aman untuk mengerjakan dan mengelola asesmen.</p>
+      </div>
+      <div className="p-5 pb-0 sm:px-6">
+        <a href="/sso/start" className="flex min-h-12 w-full items-center justify-center rounded-xl bg-brand px-4 text-center font-semibold text-white hover:bg-brand-dark">Masuk melalui akun LMS</a>
+        <p className="mt-2 text-center text-xs text-slate-500">Gunakan akun sekolah yang sama. LMS memverifikasi identitas dan peran Anda.</p>
+      </div>
+      <form onSubmit={submit} className="space-y-4 p-5 sm:p-6">
+        <div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1">{tab('student', 'NISN + kode')}{tab('student-account', 'Siswa lokal')}{tab('staff', 'Tutor / Admin')}</div>
+        {mode === 'student' ? <>
+          <Field label="NISN"><input required value={nisn} onChange={(e) => setNisn(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Masukkan NISN" autoComplete="username"/></Field>
+          <Field label="Kode akses ujian"><input required value={accessCode} onChange={(e) => setAccessCode(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Diberikan tutor" autoComplete="one-time-code"/></Field>
+        </> : mode === 'student-account' ? <>
+          <p className="rounded-xl bg-sky-50 p-3 text-sm text-sky-900">Akun siswa dari LMS gunakan tombol Masuk melalui akun LMS. Form ini hanya untuk akun CBT siswa lokal yang belum ditautkan.</p>
+          <Field label="Username siswa"><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field>
+          <Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field>
+        </> : <>
+          <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Akun tutor yang tersinkron dari LMS harus masuk lewat tombol SSO di atas. Login ini hanya untuk akun CBT lokal darurat.</p>
+          <Field label="Username CBT"><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field>
+          <Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field>
+        </>}
+        {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+        <Button type="submit" className="w-full" disabled={busy}>{busy ? 'Memeriksa…' : mode === 'student' ? 'Lihat ujian' : mode === 'student-account' ? 'Masuk sebagai siswa' : 'Masuk ke workspace'}</Button>
+      </form>
+    </Card>
+  </main>
 }
 
 function Dashboard({ session, onNavigate }: { session: Session; onNavigate: (tab: string) => void }) {

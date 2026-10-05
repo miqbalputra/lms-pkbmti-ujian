@@ -27,10 +27,10 @@ import (
 )
 
 type Config struct {
-	Env, JWTSecret, PublicBaseURL, LMSBaseURL, IntegrationKeyID, IntegrationSecret, UploadsDir string
-	SyncInterval                                                                               time.Duration
-	ForceHTTPS                                                                                 bool
-	TrustedProxies                                                                             []string
+	Env, JWTSecret, PublicBaseURL, LMSBaseURL, LMSPublicURL, IntegrationKeyID, IntegrationSecret, SSOSecret, UploadsDir string
+	SyncInterval                                                                                                        time.Duration
+	ForceHTTPS                                                                                                          bool
+	TrustedProxies                                                                                                      []string
 }
 type Server struct {
 	db         *gorm.DB
@@ -111,7 +111,8 @@ func main() {
 	if err != nil {
 		panic("FORCE_HTTPS harus bernilai true atau false")
 	}
-	cfg := Config{Env: env("APP_ENV", "development"), JWTSecret: env("JWT_SECRET", "development-secret-change-me-32-chars"), PublicBaseURL: env("PUBLIC_BASE_URL", "http://localhost:5173"), LMSBaseURL: strings.TrimRight(env("LMS_BASE_URL", "http://localhost:8080"), "/"), IntegrationKeyID: env("LMS_INTEGRATION_KEY_ID", "cbt-local"), IntegrationSecret: env("LMS_INTEGRATION_HMAC_SECRET", "development-integration-secret-change-me"), UploadsDir: env("UPLOADS_DIR", "uploads"), SyncInterval: mustDuration(env("LMS_SYNC_INTERVAL", "5m")), ForceHTTPS: forceHTTPS, TrustedProxies: trustedProxies}
+	lmsBaseURL := strings.TrimRight(env("LMS_BASE_URL", "http://localhost:8080"), "/")
+	cfg := Config{Env: env("APP_ENV", "development"), JWTSecret: env("JWT_SECRET", "development-secret-change-me-32-chars"), PublicBaseURL: env("PUBLIC_BASE_URL", "http://localhost:5173"), LMSBaseURL: lmsBaseURL, LMSPublicURL: strings.TrimRight(env("LMS_PUBLIC_URL", lmsBaseURL), "/"), IntegrationKeyID: env("LMS_INTEGRATION_KEY_ID", "cbt-local"), IntegrationSecret: env("LMS_INTEGRATION_HMAC_SECRET", "development-integration-secret-change-me"), SSOSecret: env("LMS_SSO_HMAC_SECRET", ""), UploadsDir: env("UPLOADS_DIR", "uploads"), SyncInterval: mustDuration(env("LMS_SYNC_INTERVAL", "5m")), ForceHTTPS: forceHTTPS, TrustedProxies: trustedProxies}
 	if len(cfg.JWTSecret) < 32 && cfg.Env == "production" {
 		panic("JWT_SECRET minimal 32 karakter")
 	}
@@ -147,6 +148,8 @@ func main() {
 	})
 	api := app.Group("/api")
 	api.Post("/auth/login", s.login)
+	api.Post("/auth/sso/exchange", s.ssoExchange)
+	app.Get("/sso/start", s.startSSO)
 	api.Get("/auth/me", s.auth, func(c *fiber.Ctx) error {
 		account := currentAccount(c)
 		return c.JSON(fiber.Map{"id": account.ID, "username": account.Username, "nama": account.Nama, "role": account.Role, "pesertaDidikId": account.PesertaDidikID})
@@ -265,7 +268,7 @@ func (s *Server) migrate() error {
 			return fmt.Errorf("remove obsolete unique index on master student NISN: %w", err)
 		}
 	}
-	return s.db.AutoMigrate(&CBTAccount{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
+	return s.db.AutoMigrate(&CBTAccount{}, &CBTSSOState{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
 }
 func (s *Server) ensureAdmin() error {
 	var count int64

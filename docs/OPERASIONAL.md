@@ -35,10 +35,11 @@ Untuk pemulihan insiden, hentikan perubahan aplikasi, siapkan database CBT tujua
 
 ## Akun dan peran
 
-- Admin CBT membuat akun staf/siswa melalui Manajemen Akun; gunakan username unik dan password kuat yang diserahkan secara privat.
-- Untuk siswa, pastikan akun terhubung ke satu peserta didik aktif yang sudah tersinkron. Menonaktifkan peserta pada LMS akan menonaktifkan akun CBT setelah sinkron berikutnya.
-- Guru hanya mengelola asesmen/soal miliknya; kepala sekolah baca-saja; siswa hanya dapat mengakses attempt-nya sendiri.
-- Perubahan peran/identitas master dikelola di LMS. Password lokal CBT tidak disalin dari LMS.
+- Tutor/admin/kepala sekolah masuk melalui SSO LMS: dari LMS pilih **CBT & Asesmen**, atau pada halaman CBT pilih **Masuk melalui akun LMS**. Siswa dengan akun LMS juga dapat memilih tombol yang sama. CBT memverifikasi tiket singkat LMS dan memetakan akun melalui ID pengguna sumber; password LMS tidak disalin.
+- Samakan `CBT_SSO_HMAC_SECRET` pada LMS dengan `LMS_SSO_HMAC_SECRET` pada CBT. Gunakan secret acak minimal 32 karakter yang berbeda dari secret HMAC sinkronisasi hasil/master. Atur `LMS_PUBLIC_URL` di CBT ke domain LMS publik.
+- Akun siswa dapat memakai SSO LMS jika sudah terhubung ke peserta didik aktif yang tersinkron. Jalur lama NISN + kode akses untuk Ujian Online tetap tersedia.
+- Akun yang identitasnya berasal dari LMS hanya dapat masuk melalui SSO. Akun CBT lokal yang tidak ditautkan masih tersedia untuk operasi darurat dan tidak menggantikan akun utama LMS.
+- Guru hanya mengelola asesmen/soal miliknya; kepala sekolah baca-saja; siswa hanya dapat mengakses attempt-nya sendiri. Menonaktifkan akun LMS menghentikan tiket SSO baru dan sinkronisasi master menonaktifkan akun CBT terkait.
 
 ## Troubleshooting sinkronisasi
 
