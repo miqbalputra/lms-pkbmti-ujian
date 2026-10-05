@@ -233,6 +233,7 @@ func main() {
 	staff.Post("/recoveries/:id/review", s.reviewAttemptRecovery)
 	staff.Get("/master/students", s.listStudents)
 	staff.Get("/master/classes", s.listClasses)
+	staff.Get("/master/groups", s.listLearningGroups)
 	staff.Post("/master/classes/manual-label", s.createManualClassLabel)
 	staff.Get("/sync/status", s.syncStatus)
 	staff.Get("/sync/history", s.syncHistory)
@@ -269,7 +270,7 @@ func (s *Server) migrate() error {
 			return fmt.Errorf("remove obsolete unique index on master student NISN: %w", err)
 		}
 	}
-	return s.db.AutoMigrate(&CBTAccount{}, &CBTSSOState{}, &MasterKelas{}, &MasterPeserta{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
+	return s.db.AutoMigrate(&CBTAccount{}, &CBTSSOState{}, &MasterKelas{}, &MasterPeserta{}, &MasterKelompokBelajar{}, &MasterTahunAjaran{}, &MasterProgram{}, &MasterFase{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
 }
 func (s *Server) ensureAdmin() error {
 	var count int64
@@ -1078,7 +1079,7 @@ func (s *Server) publicExamLogin(c *fiber.Ctx) error {
 		return err
 	}
 	token, _ := s.issueToken(account, 8*time.Hour)
-	return c.JSON(fiber.Map{"accessToken": token, "student": fiber.Map{"id": student.ID, "nama": student.Nama}, "assessments": rows})
+	return c.JSON(fiber.Map{"accessToken": token, "student": fiber.Map{"id": student.ID, "nama": student.Nama, "nis": student.NIS, "nisn": student.NISN}, "assessments": rows})
 }
 func (s *Server) studentHasAssessmentAccess(student MasterPeserta, assessment Assessment) (bool, error) {
 	var assignmentCount, directAssignmentCount int64
@@ -1184,8 +1185,8 @@ func (s *Server) verifyStudentAssessment(c *fiber.Ctx) error {
 		subjectName = subject.Nama
 	}
 	return c.JSON(fiber.Map{
-		"verified": true,
-		"student": fiber.Map{"id": student.ID, "name": student.Nama, "nisn": student.NISN, "className": className},
+		"verified":   true,
+		"student":    fiber.Map{"id": student.ID, "name": student.Nama, "nis": student.NIS, "nisn": student.NISN, "className": className},
 		"assessment": fiber.Map{"id": assessment.ID, "title": assessment.Title, "kind": assessment.Kind, "subjectName": subjectName, "durationMinute": assessment.DurationMinute, "room": assessment.Room, "startsAt": assessment.StartsAt, "endsAt": assessment.EndsAt, "instructions": assessment.Instructions},
 		"serverTime": now.UTC(),
 	})
@@ -1932,20 +1933,6 @@ func (s *Server) gradeAnswer(c *fiber.Ctx) error {
 	_ = s.enqueueAttemptResult(attempt.ID)
 	s.audit(account.ID, "grade_answer", answer.ID)
 	return c.JSON(answer)
-}
-func (s *Server) listStudents(c *fiber.Ctx) error {
-	var rows []MasterPeserta
-	if err := s.db.Where("active = ?", true).Order("nama").Find(&rows).Error; err != nil {
-		return err
-	}
-	return c.JSON(rows)
-}
-func (s *Server) listClasses(c *fiber.Ctx) error {
-	var rows []MasterKelas
-	if err := s.db.Where("active = ?", true).Order("jenjang, nama").Find(&rows).Error; err != nil {
-		return err
-	}
-	return c.JSON(rows)
 }
 
 // createManualClassLabel is a temporary recovery path for LMS integrations that

@@ -63,16 +63,22 @@ func TestManualMasterSyncRequestsFullFeedAndAutomaticSyncKeepsCursor(t *testing.
 }
 
 func TestMasterPayloadDecodesCanonicalLMSJSONFields(t *testing.T) {
-	data := []byte(`{"cursor":"2026-10-03T00:00:00Z","kelas":[{"id":"class-1","nama":"Paket A Kelas 1","jenjang":1,"active":true,"updatedAt":"2026-10-03T00:00:00Z"}],"pesertaDidik":[{"id":"student-1","nama":"Siswa Satu","nisn":"1234567890","kelasId":"class-1","active":true,"updatedAt":"2026-10-03T00:00:00Z"}]}`)
+	data := []byte(`{"schemaVersion":2,"cursor":"2026-10-03T00:00:00Z","kelas":[{"id":"class-1","nama":"Paket A Kelas 1","jenjang":1,"pokjarId":"pokjar-1","tahunAjaranId":"ta-1","programId":"program-1","faseId":"fase-1","active":true,"updatedAt":"2026-10-03T00:00:00Z"}],"pesertaDidik":[{"id":"student-1","nama":"Siswa Satu","nis":"NIS-001","nisn":"1234567890","jenisKelamin":"P","kelasId":"class-1","pokjarId":"pokjar-1","programId":"program-1","urutan":4,"active":true,"updatedAt":"2026-10-03T00:00:00Z"}],"kelompokBelajar":[{"id":"pokjar-1","namaPokjar":"Pokjar Utama","tipe":"Dalam Kota"}],"tahunAjaran":[{"id":"ta-1","namaTahunAjaran":"2026/2027","active":true}],"program":[{"id":"program-1","kode":"A","nama":"Paket A","jenjangSetara":"SD"}],"fase":[{"id":"fase-1","kode":"A","nama":"Fase A","jenjangSetara":"SD"}]}`)
 	var payload masterPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Kelas) != 1 || payload.Kelas[0].ID != "class-1" || payload.Kelas[0].Nama != "Paket A Kelas 1" || !payload.Kelas[0].Active {
+	if payload.SchemaVersion != 2 {
+		t.Fatalf("expected extended roster schema v2, got %d", payload.SchemaVersion)
+	}
+	if len(payload.Kelas) != 1 || payload.Kelas[0].ID != "class-1" || payload.Kelas[0].Nama != "Paket A Kelas 1" || payload.Kelas[0].PokjarID != "pokjar-1" || payload.Kelas[0].TahunAjaranID != "ta-1" || payload.Kelas[0].ProgramID != "program-1" || payload.Kelas[0].FaseID != "fase-1" || !payload.Kelas[0].Active {
 		t.Fatalf("LMS class record was not decoded: %+v", payload.Kelas)
 	}
-	if len(payload.PesertaDidik) != 1 || payload.PesertaDidik[0].ID != "student-1" || payload.PesertaDidik[0].KelasID != "class-1" || payload.PesertaDidik[0].NISN != "1234567890" || !payload.PesertaDidik[0].Active {
+	if len(payload.PesertaDidik) != 1 || payload.PesertaDidik[0].ID != "student-1" || payload.PesertaDidik[0].KelasID != "class-1" || payload.PesertaDidik[0].NIS != "NIS-001" || payload.PesertaDidik[0].NISN != "1234567890" || payload.PesertaDidik[0].JenisKelamin != "P" || payload.PesertaDidik[0].PokjarID != "pokjar-1" || payload.PesertaDidik[0].Urutan != 4 || !payload.PesertaDidik[0].Active {
 		t.Fatalf("LMS student record was not decoded: %+v", payload.PesertaDidik)
+	}
+	if len(payload.KelompokBelajar) != 1 || payload.KelompokBelajar[0].ID != "pokjar-1" || payload.KelompokBelajar[0].Nama != "Pokjar Utama" || len(payload.TahunAjaran) != 1 || payload.TahunAjaran[0].Nama != "2026/2027" || len(payload.Program) != 1 || payload.Program[0].Nama != "Paket A" || len(payload.Fase) != 1 || payload.Fase[0].Nama != "Fase A" {
+		t.Fatalf("LMS roster metadata was not decoded: %+v", payload)
 	}
 }
 
@@ -112,6 +118,7 @@ func TestSyncErrorMessageExplainsCommonIntegrationFailures(t *testing.T) {
 	tests := []struct{ detail, want string }{
 		{"LMS merespons HTTP 401: unauthorized", "menolak autentikasi"},
 		{"LMS merespons HTTP 503: Terjadi kesalahan internal", "CBT_INTEGRATION_KEY_ID"},
+		{"LMS master feed schema version 0; roster schema version 2 is required", "Deploy pembaruan backend LMS"},
 		{"LMS merespons HTTP 502: gateway", "domain/port di Coolify"},
 		{"LMS merespons HTTP 404", "tidak ditemukan"},
 		{"Get https://example: context deadline exceeded", "tidak merespons"},

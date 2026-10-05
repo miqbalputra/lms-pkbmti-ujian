@@ -30,19 +30,55 @@ type lmsAccount struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 type lmsKelas struct {
+	ID            string    `json:"id"`
+	Nama          string    `json:"nama"`
+	Jenjang       int       `json:"jenjang"`
+	PokjarID      string    `json:"pokjarId"`
+	TahunAjaranID string    `json:"tahunAjaranId"`
+	WaliKelasID   string    `json:"waliKelasId"`
+	ProgramID     string    `json:"programId"`
+	FaseID        string    `json:"faseId"`
+	Active        bool      `json:"active"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+type lmsPeserta struct {
+	ID           string    `json:"id"`
+	Nama         string    `json:"nama"`
+	NIS          string    `json:"nis"`
+	NISN         string    `json:"nisn"`
+	JenisKelamin string    `json:"jenisKelamin"`
+	KelasID      string    `json:"kelasId"`
+	PokjarID     string    `json:"pokjarId"`
+	ProgramID    string    `json:"programId"`
+	Urutan       int       `json:"urutan"`
+	Active       bool      `json:"active"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+type lmsPokjar struct {
 	ID        string    `json:"id"`
-	Nama      string    `json:"nama"`
-	Jenjang   int       `json:"jenjang"`
+	Nama      string    `json:"namaPokjar"`
+	Tipe      string    `json:"tipe"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+type lmsTahunAjaran struct {
+	ID        string    `json:"id"`
+	Nama      string    `json:"namaTahunAjaran"`
 	Active    bool      `json:"active"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
-type lmsPeserta struct {
-	ID        string    `json:"id"`
-	Nama      string    `json:"nama"`
-	NISN      string    `json:"nisn"`
-	KelasID   string    `json:"kelasId"`
-	Active    bool      `json:"active"`
-	UpdatedAt time.Time `json:"updatedAt"`
+type lmsProgram struct {
+	ID            string    `json:"id"`
+	Kode          string    `json:"kode"`
+	Nama          string    `json:"nama"`
+	JenjangSetara string    `json:"jenjangSetara"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+type lmsFase struct {
+	ID            string    `json:"id"`
+	Kode          string    `json:"kode"`
+	Nama          string    `json:"nama"`
+	JenjangSetara string    `json:"jenjangSetara"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 type lmsTutor struct {
 	ID        string    `json:"id"`
@@ -58,12 +94,17 @@ type lmsMapel struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 type masterPayload struct {
-	Cursor       string       `json:"cursor"`
-	Accounts     []lmsAccount `json:"accounts"`
-	Kelas        []lmsKelas   `json:"kelas"`
-	PesertaDidik []lmsPeserta `json:"pesertaDidik"`
-	Tutor        []lmsTutor   `json:"tutor"`
-	Mapel        []lmsMapel   `json:"mapel"`
+	SchemaVersion   int              `json:"schemaVersion"`
+	Cursor          string           `json:"cursor"`
+	Accounts        []lmsAccount     `json:"accounts"`
+	Kelas           []lmsKelas       `json:"kelas"`
+	PesertaDidik    []lmsPeserta     `json:"pesertaDidik"`
+	KelompokBelajar []lmsPokjar      `json:"kelompokBelajar"`
+	TahunAjaran     []lmsTahunAjaran `json:"tahunAjaran"`
+	Program         []lmsProgram     `json:"program"`
+	Fase            []lmsFase        `json:"fase"`
+	Tutor           []lmsTutor       `json:"tutor"`
+	Mapel           []lmsMapel       `json:"mapel"`
 }
 
 func (s *Server) integrationSignature(method, path, timestamp, nonce string, body []byte) string {
@@ -131,11 +172,15 @@ func setSyncState(db *gorm.DB, key, value string) error {
 }
 
 type syncCounts struct {
-	Accounts int `json:"accounts"`
-	Classes  int `json:"classes"`
-	Students int `json:"students"`
-	Tutors   int `json:"tutors"`
-	Subjects int `json:"subjects"`
+	Accounts      int `json:"accounts"`
+	Classes       int `json:"classes"`
+	Students      int `json:"students"`
+	Groups        int `json:"groups"`
+	AcademicYears int `json:"academicYears"`
+	Programs      int `json:"programs"`
+	Phases        int `json:"phases"`
+	Tutors        int `json:"tutors"`
+	Subjects      int `json:"subjects"`
 }
 
 func syncErrorMessage(err error) string {
@@ -150,6 +195,8 @@ func syncErrorMessage(err error) string {
 		return "Integrasi belum dikonfigurasi di LMS. Isi CBT_INTEGRATION_KEY_ID dan CBT_INTEGRATION_HMAC_SECRET di environment LMS, lalu samakan nilainya dengan LMS_INTEGRATION_KEY_ID dan LMS_INTEGRATION_HMAC_SECRET di CBT."
 	case strings.Contains(message, "http 404"):
 		return "Endpoint sinkronisasi LMS tidak ditemukan. Periksa LMS_BASE_URL dan pastikan backend LMS mendukung integrasi CBT."
+	case strings.Contains(message, "schema version"):
+		return "Backend LMS belum mengirim data roster lengkap. Deploy pembaruan backend LMS terlebih dahulu agar CBT menerima NIS, NISN, kelas, kelompok belajar, dan tahun ajaran."
 	case strings.Contains(message, "http 502"):
 		return "Gateway gagal menghubungi LMS (HTTP 502). Periksa LMS_BASE_URL, domain/port di Coolify, dan log backend LMS; data terakhir tetap digunakan."
 	case strings.Contains(message, "http 503"):
@@ -217,13 +264,16 @@ func (s *Server) syncMaster(fullRefresh bool) (syncCounts, error) {
 	if err != nil {
 		return syncCounts{}, err
 	}
-	counts := syncCounts{Accounts: len(payload.Accounts), Classes: len(payload.Kelas), Students: len(payload.PesertaDidik), Tutors: len(payload.Tutor), Subjects: len(payload.Mapel)}
+	if payload.SchemaVersion < 2 {
+		return syncCounts{}, fmt.Errorf("LMS master feed schema version %d; roster schema version 2 is required", payload.SchemaVersion)
+	}
+	counts := syncCounts{Accounts: len(payload.Accounts), Classes: len(payload.Kelas), Students: len(payload.PesertaDidik), Groups: len(payload.KelompokBelajar), AcademicYears: len(payload.TahunAjaran), Programs: len(payload.Program), Phases: len(payload.Fase), Tutors: len(payload.Tutor), Subjects: len(payload.Mapel)}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		for _, source := range payload.Kelas {
 			if source.ID == "" {
 				continue
 			}
-			row := MasterKelas{Base: Base{ID: source.ID}, Nama: source.Nama, Jenjang: source.Jenjang, Active: source.Active, SourceUpdatedAt: source.UpdatedAt.Unix()}
+			row := MasterKelas{Base: Base{ID: source.ID}, Nama: source.Nama, Jenjang: source.Jenjang, PokjarID: source.PokjarID, TahunAjaranID: source.TahunAjaranID, WaliKelasID: source.WaliKelasID, ProgramID: source.ProgramID, FaseID: source.FaseID, Active: source.Active, SourceUpdatedAt: source.UpdatedAt.Unix()}
 			if err := tx.Save(&row).Error; err != nil {
 				return err
 			}
@@ -232,7 +282,7 @@ func (s *Server) syncMaster(fullRefresh bool) (syncCounts, error) {
 			if source.ID == "" {
 				continue
 			}
-			row := MasterPeserta{Base: Base{ID: source.ID}, Nama: source.Nama, NISN: source.NISN, KelasID: source.KelasID, Active: source.Active, SourceUpdatedAt: source.UpdatedAt.Unix()}
+			row := MasterPeserta{Base: Base{ID: source.ID}, Nama: source.Nama, NIS: source.NIS, NISN: source.NISN, JenisKelamin: source.JenisKelamin, KelasID: source.KelasID, PokjarID: source.PokjarID, ProgramID: source.ProgramID, Urutan: source.Urutan, Active: source.Active, SourceUpdatedAt: source.UpdatedAt.Unix()}
 			if err := tx.Save(&row).Error; err != nil {
 				return err
 			}
@@ -240,6 +290,42 @@ func (s *Server) syncMaster(fullRefresh bool) (syncCounts, error) {
 				if err := tx.Model(&CBTAccount{}).Where("peserta_didik_id = ?", source.ID).Update("active", false).Error; err != nil {
 					return err
 				}
+			}
+		}
+		for _, source := range payload.KelompokBelajar {
+			if source.ID == "" {
+				continue
+			}
+			row := MasterKelompokBelajar{Base: Base{ID: source.ID}, Nama: source.Nama, Tipe: source.Tipe, SourceUpdatedAt: source.UpdatedAt.Unix()}
+			if err := tx.Save(&row).Error; err != nil {
+				return err
+			}
+		}
+		for _, source := range payload.TahunAjaran {
+			if source.ID == "" {
+				continue
+			}
+			row := MasterTahunAjaran{Base: Base{ID: source.ID}, Nama: source.Nama, Active: source.Active, SourceUpdatedAt: source.UpdatedAt.Unix()}
+			if err := tx.Save(&row).Error; err != nil {
+				return err
+			}
+		}
+		for _, source := range payload.Program {
+			if source.ID == "" {
+				continue
+			}
+			row := MasterProgram{Base: Base{ID: source.ID}, Kode: source.Kode, Nama: source.Nama, JenjangSetara: source.JenjangSetara, SourceUpdatedAt: source.UpdatedAt.Unix()}
+			if err := tx.Save(&row).Error; err != nil {
+				return err
+			}
+		}
+		for _, source := range payload.Fase {
+			if source.ID == "" {
+				continue
+			}
+			row := MasterFase{Base: Base{ID: source.ID}, Kode: source.Kode, Nama: source.Nama, JenjangSetara: source.JenjangSetara, SourceUpdatedAt: source.UpdatedAt.Unix()}
+			if err := tx.Save(&row).Error; err != nil {
+				return err
 			}
 		}
 		for _, source := range payload.Tutor {
@@ -294,7 +380,7 @@ func (s *Server) recordMasterSync(trigger, actor string) (SyncRun, error) {
 		return run, err
 	}
 	counts, syncErr := s.syncMaster(trigger == "manual")
-	run.Accounts, run.Classes, run.Students, run.Tutors, run.Subjects = counts.Accounts, counts.Classes, counts.Students, counts.Tutors, counts.Subjects
+	run.Accounts, run.Classes, run.Students, run.Groups, run.AcademicYears, run.Programs, run.Phases, run.Tutors, run.Subjects = counts.Accounts, counts.Classes, counts.Students, counts.Groups, counts.AcademicYears, counts.Programs, counts.Phases, counts.Tutors, counts.Subjects
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 	if syncErr != nil {
@@ -306,9 +392,9 @@ func (s *Server) recordMasterSync(trigger, actor string) (SyncRun, error) {
 		if trigger == "manual" && counts.Classes == 0 && counts.Students == 0 {
 			run.Message = "Sinkronisasi penuh berhasil, tetapi LMS mengirim 0 kelas dan 0 siswa. Periksa apakah data peserta didik aktif tersedia di LMS dan LMS_BASE_URL mengarah ke aplikasi LMS yang benar."
 		} else if trigger == "manual" {
-			run.Message = fmt.Sprintf("Rekonsiliasi penuh berhasil: %d siswa, %d kelas, %d tutor, %d mapel, %d akun diperiksa dari LMS.", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts)
+			run.Message = fmt.Sprintf("Rekonsiliasi penuh berhasil: %d siswa, %d kelas, %d kelompok belajar, %d tahun ajaran, %d tutor, %d mapel, %d akun diperiksa dari LMS.", counts.Students, counts.Classes, counts.Groups, counts.AcademicYears, counts.Tutors, counts.Subjects, counts.Accounts)
 		} else {
-			run.Message = fmt.Sprintf("Batch sinkronisasi berhasil: %d siswa, %d kelas, %d tutor, %d mapel, %d akun diperbarui.", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts)
+			run.Message = fmt.Sprintf("Batch sinkronisasi berhasil: %d siswa, %d kelas, %d kelompok belajar, %d tahun ajaran, %d tutor, %d mapel, %d akun diperbarui.", counts.Students, counts.Classes, counts.Groups, counts.AcademicYears, counts.Tutors, counts.Subjects, counts.Accounts)
 		}
 	}
 	if err := s.db.Save(&run).Error; err != nil {
@@ -318,7 +404,7 @@ func (s *Server) recordMasterSync(trigger, actor string) (SyncRun, error) {
 		"last_master_sync_status":  run.Status,
 		"last_master_sync_message": run.Message,
 		"last_master_sync_at":      finished.Format(time.RFC3339),
-		"last_master_sync_counts":  fmt.Sprintf("siswa=%d, kelas=%d, tutor=%d, mapel=%d, akun=%d", counts.Students, counts.Classes, counts.Tutors, counts.Subjects, counts.Accounts),
+		"last_master_sync_counts":  fmt.Sprintf("siswa=%d, kelas=%d, kelompok_belajar=%d, tahun_ajaran=%d, tutor=%d, mapel=%d, akun=%d", counts.Students, counts.Classes, counts.Groups, counts.AcademicYears, counts.Tutors, counts.Subjects, counts.Accounts),
 	}
 	if syncErr != nil {
 		state["last_master_sync_error"] = run.ErrorDetails

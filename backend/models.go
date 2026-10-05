@@ -37,18 +37,54 @@ type MasterKelas struct {
 	Base
 	Nama            string `json:"nama"`
 	Jenjang         int    `json:"jenjang"`
+	PokjarID        string `gorm:"index" json:"pokjarId"`
+	TahunAjaranID   string `gorm:"index" json:"tahunAjaranId"`
+	WaliKelasID     string `gorm:"index" json:"waliKelasId,omitempty"`
+	ProgramID       string `gorm:"index" json:"programId,omitempty"`
+	FaseID          string `gorm:"index" json:"faseId,omitempty"`
 	Active          bool   `gorm:"index;default:true" json:"active"`
 	ManualFallback  bool   `gorm:"index;default:false" json:"manualFallback"`
 	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
 }
 type MasterPeserta struct {
 	Base
-	Nama string `json:"nama"`
+	Nama         string `json:"nama"`
+	NIS          string `gorm:"index" json:"nis"`
+	JenisKelamin string `json:"jenisKelamin"`
 	// NISN is a source identifier, not a guaranteed unique key. LMS permits
 	// repeated temporary/placeholder values while official NISNs are pending.
 	NISN            string `gorm:"index" json:"nisn"`
 	KelasID         string `gorm:"index" json:"kelasId"`
+	PokjarID        string `gorm:"index" json:"pokjarId"`
+	ProgramID       string `gorm:"index" json:"programId,omitempty"`
+	Urutan          int    `json:"urutan"`
 	Active          bool   `gorm:"index;default:true" json:"active"`
+	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
+}
+type MasterKelompokBelajar struct {
+	Base
+	Nama            string `gorm:"size:160;index" json:"namaPokjar"`
+	Tipe            string `json:"tipe,omitempty"`
+	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
+}
+type MasterTahunAjaran struct {
+	Base
+	Nama            string `gorm:"size:80;index" json:"namaTahunAjaran"`
+	Active          bool   `gorm:"index;default:false" json:"active"`
+	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
+}
+type MasterProgram struct {
+	Base
+	Kode            string `json:"kode"`
+	Nama            string `json:"nama"`
+	JenjangSetara   string `json:"jenjangSetara"`
+	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
+}
+type MasterFase struct {
+	Base
+	Kode            string `json:"kode"`
+	Nama            string `json:"nama"`
+	JenjangSetara   string `json:"jenjangSetara"`
 	SourceUpdatedAt int64  `json:"sourceUpdatedAt"`
 }
 type MasterTutor struct {
@@ -291,17 +327,21 @@ type SyncState struct {
 }
 type SyncRun struct {
 	Base
-	Trigger      string     `gorm:"index" json:"trigger"`
-	Status       string     `gorm:"index" json:"status"`
-	StartedAt    time.Time  `json:"startedAt"`
-	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
-	Accounts     int        `json:"accounts"`
-	Classes      int        `json:"classes"`
-	Students     int        `json:"students"`
-	Tutors       int        `json:"tutors"`
-	Subjects     int        `json:"subjects"`
-	Message      string     `gorm:"type:text" json:"message,omitempty"`
-	ErrorDetails string     `gorm:"type:text" json:"-"`
+	Trigger       string     `gorm:"index" json:"trigger"`
+	Status        string     `gorm:"index" json:"status"`
+	StartedAt     time.Time  `json:"startedAt"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	Accounts      int        `json:"accounts"`
+	Classes       int        `json:"classes"`
+	Students      int        `json:"students"`
+	Groups        int        `json:"groups"`
+	AcademicYears int        `json:"academicYears"`
+	Programs      int        `json:"programs"`
+	Phases        int        `json:"phases"`
+	Tutors        int        `json:"tutors"`
+	Subjects      int        `json:"subjects"`
+	Message       string     `gorm:"type:text" json:"message,omitempty"`
+	ErrorDetails  string     `gorm:"type:text" json:"-"`
 }
 type IntegrationNonce struct {
 	Nonce     string    `gorm:"primaryKey"`
