@@ -146,12 +146,30 @@ function routePath(tab: string) {
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const [mode, setMode] = useState<'staff' | 'student' | 'student-account'>('student')
   const [service, setService] = useState<'ujian_online' | 'simulasi'>('simulasi')
+  const [entryStage, setEntryStage] = useState<'choose' | 'login'>('choose')
+  const [gradeLevel, setGradeLevel] = useState('1')
+  const [subjectCategory, setSubjectCategory] = useState('wajib')
+  const [subject, setSubject] = useState('Bahasa Indonesia')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [nisn, setNisn] = useState('')
   const [accessCode, setAccessCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  const simulationSubjects = gradeLevel === '3'
+    ? subjectCategory === 'wajib' ? ['Bahasa Indonesia', 'Matematika', 'Bahasa Inggris'] : ['Ekonomi', 'Sosiologi', 'Geografi']
+    : subjectCategory === 'wajib' ? ['Bahasa Indonesia', 'Matematika'] : []
+  const nextPath = (() => {
+    if (mode === 'staff') return '/'
+    const params = new URLSearchParams({ jenis: service })
+    if (service === 'simulasi') {
+      params.set('jenjang', gradeLevel)
+      params.set('kategori_mapel', subjectCategory)
+      if (subject) params.set('mapel', subject)
+    }
+    return `/?${params.toString()}`
+  })()
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -175,40 +193,48 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   }
   const tab = (value: 'student' | 'student-account' | 'staff', label: string) => <button type="button" onClick={() => { setMode(value); setError('') }} className={`min-h-12 rounded-lg px-2 text-xs font-bold sm:text-sm ${mode === value ? 'bg-white text-brand shadow' : 'text-slate-500'}`}>{label}</button>
 
-  return <main className="relative min-h-screen overflow-hidden bg-slate-50 px-4 pb-10 pt-24">
-    <div aria-hidden="true" className="absolute inset-x-0 top-0 h-56 bg-[linear-gradient(125deg,#2f6594,#3c78ad_58%,#315f89)]"/>
-    <header className="absolute inset-x-0 top-0 z-10 mx-auto flex max-w-6xl items-center gap-3 px-4 py-5 text-white"><span className="grid size-11 place-items-center rounded-full bg-white/15"><GraduationCap/></span><div><p className="text-sm font-black tracking-wide">PKBM TUNAS ILMU</p><p className="text-xs text-blue-100">CBT & Asesmen</p></div></header>
-    <Card className="relative mx-auto w-full max-w-md overflow-hidden border-0 shadow-xl">
-      <div className="p-6 pb-0 text-center sm:p-7 sm:pb-0">
-        <div className="mx-auto mb-3 grid size-14 place-items-center rounded-full bg-brand text-white shadow-lg"><GraduationCap/></div>
-        <p className="text-xs font-bold uppercase tracking-wider text-brand">Ruang Asesmen Sekolah</p>
-        <h1 className="mt-1 text-2xl font-bold">Selamat datang</h1>
-        <p className="mt-2 text-sm leading-relaxed text-slate-600">Masuk dengan akun sekolah untuk memilih ujian dan simulasi yang ditugaskan.</p>
-      </div>
-      <div className="p-5 pb-0 sm:px-6">
-        <p className="mb-2 text-center text-sm font-bold text-slate-800">1. Pilih jenis asesmen</p>
-        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Pilih jenis asesmen"><button type="button" aria-pressed={service === 'ujian_online'} onClick={() => setService('ujian_online')} className={`min-h-14 rounded-xl border px-3 text-sm font-semibold transition ${service === 'ujian_online' ? 'border-brand bg-sky-50 text-brand ring-1 ring-brand' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>Ujian Online</button><button type="button" aria-pressed={service === 'simulasi'} onClick={() => setService('simulasi')} className={`min-h-14 rounded-xl border px-3 text-sm font-semibold transition ${service === 'simulasi' ? 'border-brand bg-sky-50 text-brand ring-1 ring-brand' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>Simulasi ANBK / TKA</button></div>
-        <p className="mb-2 mt-4 text-center text-sm font-bold text-slate-800">2. Masuk dengan akun sekolah</p>
-        <a href={`/sso/start?next=${encodeURIComponent(`/?jenis=${service}`)}`} className="flex min-h-12 w-full items-center justify-center rounded-xl bg-brand px-4 text-center font-semibold text-white hover:bg-brand-dark">Masuk melalui akun LMS</a>
-        <p className="mt-2 text-center text-xs text-slate-500">Gunakan akun sekolah yang sama. LMS memverifikasi identitas dan peran Anda.</p>
-      </div>
-      <form onSubmit={submit} className="space-y-4 p-5 sm:p-6">
-        <div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1">{tab('student', 'NISN + kode')}{tab('student-account', 'Siswa lokal')}{tab('staff', 'Tutor / Admin')}</div>
-        {mode === 'student' ? <>
-          <Field label="NISN"><input required value={nisn} onChange={(e) => setNisn(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Masukkan NISN" autoComplete="username"/></Field>
-          <Field label="Kode akses ujian"><input required value={accessCode} onChange={(e) => setAccessCode(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Diberikan tutor" autoComplete="one-time-code"/></Field>
-        </> : mode === 'student-account' ? <>
-          <p className="rounded-xl bg-sky-50 p-3 text-sm text-sky-900">Akun siswa dari LMS gunakan tombol Masuk melalui akun LMS. Form ini hanya untuk akun CBT siswa lokal yang belum ditautkan.</p>
-          <Field label="Username siswa"><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field>
-          <Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field>
-        </> : <>
-          <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Akun tutor yang tersinkron dari LMS harus masuk lewat tombol SSO di atas. Login ini hanya untuk akun CBT lokal darurat.</p>
-          <Field label="Username CBT"><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field>
-          <Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field>
-        </>}
-        {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
-        <Button type="submit" className="w-full" disabled={busy}>{busy ? 'Memeriksa…' : mode === 'student' ? 'Lihat ujian' : mode === 'student-account' ? 'Masuk sebagai siswa' : 'Masuk ke workspace'}</Button>
-      </form>
+  return <main className="relative min-h-screen overflow-hidden bg-[#f4f7fb] px-4 pb-8 pt-28 sm:pt-32">
+    <div aria-hidden="true" className="absolute inset-x-0 top-0 h-60 overflow-hidden bg-[#356b9a]"><div className="absolute inset-0 opacity-40 [background-image:linear-gradient(32deg,transparent_0_17%,rgba(255,255,255,.12)_17.2%_35%,transparent_35.2%),linear-gradient(145deg,transparent_0_28%,rgba(17,87,147,.55)_28.2%_56%,transparent_56.2%)]"/><div className="absolute inset-0 opacity-[.08] [background-image:radial-gradient(#fff_1px,transparent_1px)] [background-size:22px_22px]"/></div>
+    <header className="absolute inset-x-0 top-0 z-10 mx-auto flex max-w-6xl items-center gap-3 px-4 py-5 text-white"><span className="grid size-11 place-items-center rounded-full border border-white/30 bg-white/10"><GraduationCap/></span><div><p className="text-sm font-black tracking-wide">PKBM TUNAS ILMU</p><p className="text-xs text-blue-100">SIMULASI ANBK · TKA</p></div></header>
+    <Card className="relative mx-auto w-full max-w-xl overflow-hidden border-0 p-5 shadow-[0_24px_55px_rgba(15,23,42,.22)] sm:p-8">
+      {entryStage === 'choose' ? <>
+        <div className="mx-auto mb-4 grid size-14 place-items-center rounded-full bg-[#3d79ae] text-white shadow-lg"><GraduationCap/></div>
+        <div className="text-center"><p className="text-xs font-bold uppercase tracking-wider text-[#356b9a]">Ruang asesmen sekolah</p><h1 className="mt-1 text-2xl font-bold">{service === 'simulasi' ? 'Simulasi TKA' : 'Ujian Online'}</h1><p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-slate-600">{service === 'simulasi' ? 'Pilih jenjang dan mata pelajaran untuk memulai simulasi.' : 'Lanjutkan untuk melihat ujian online yang ditugaskan kepadamu.'}</p></div>
+        {service === 'simulasi' && <div className="mt-5 grid gap-4">
+          <Field label="Jenjang pendidikan"><select aria-label="Jenjang pendidikan" className="min-h-12 rounded-xl border border-slate-300 bg-white px-3" value={gradeLevel} onChange={(event) => { setGradeLevel(event.target.value); setSubjectCategory('wajib'); setSubject('Bahasa Indonesia') }}><option value="1">Paket A / setara SD/MI</option><option value="2">Paket B / setara SMP/MTs</option><option value="3">Paket C / setara SMA/MA</option></select></Field>
+          <Field label="Jenis mata pelajaran"><select aria-label="Kategori mata pelajaran simulasi" className="min-h-12 rounded-xl border border-slate-300 bg-white px-3" value={subjectCategory} onChange={(event) => { setSubjectCategory(event.target.value); setSubject('') }}><option value="wajib">Mata Pelajaran Wajib</option>{gradeLevel === '3' && <option value="pilihan">Mata Pelajaran Pilihan</option>}</select></Field>
+          <Field label="Mata pelajaran"><select aria-label="Mata pelajaran simulasi" required className="min-h-12 rounded-xl border border-slate-300 bg-white px-3" value={subject} onChange={(event) => setSubject(event.target.value)}><option value="">Pilih mata pelajaran…</option>{simulationSubjects.map((name) => <option value={name} key={name}>{name}</option>)}</select></Field>
+        </div>}
+        {service === 'ujian_online' && <p className="mt-5 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm leading-relaxed text-sky-950">Setelah masuk, kamu akan melihat ujian online yang ditugaskan kepadamu. Gunakan kode akses dari tutor saat verifikasi.</p>}
+        <Button type="button" className="mt-6 min-h-12 w-full bg-[#3478b5] hover:bg-[#2c669a]" disabled={service === 'simulasi' && !subject} onClick={() => { setMode('student'); setEntryStage('login') }}><Play className="size-4"/>{service === 'simulasi' ? 'Mulai Simulasi' : 'Lanjutkan ke Ujian Online'}</Button>
+        <button type="button" className="mx-auto mt-2 block min-h-11 px-3 text-sm font-semibold text-slate-600 underline" onClick={() => { setService(service === 'simulasi' ? 'ujian_online' : 'simulasi'); setError('') }}>{service === 'simulasi' ? 'Beralih ke Ujian Online' : 'Kembali ke Simulasi TKA'}</button>
+        <p className="mt-5 border-t pt-4 text-center text-xs leading-relaxed text-slate-500">Simulasi mandiri PKBM Tunas Ilmu. Pola alur asesmen merujuk pada <a href="https://pusmendik.kemendikdasmen.go.id/tka/simulasi_tka/" target="_blank" rel="noreferrer" className="font-semibold text-[#356b9a] underline">Simulasi TKA Pusmendik</a>; aplikasi ini tidak dikelola atau mewakili Kemendikdasmen.</p>
+        <button type="button" className="mx-auto mt-3 block min-h-11 px-3 text-sm font-semibold text-slate-600 underline" onClick={() => { setMode('staff'); setEntryStage('login') }}>Masuk tutor / administrator CBT</button>
+      </> : <>
+        <div className="mb-5 flex items-start gap-3"><span className="grid size-12 shrink-0 place-items-center rounded-full bg-[#3d79ae] text-white"><GraduationCap/></span><div><p className="text-xs font-bold uppercase tracking-wider text-[#356b9a]">Masuk sesi</p><h1 className="text-2xl font-bold">Selamat datang</h1><p className="mt-1 text-sm text-slate-600">Gunakan akun sekolah yang sudah terdaftar.</p></div></div>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-100 bg-sky-50 p-3 text-sm"><div><b>{service === 'simulasi' ? `Simulasi · Paket ${['A', 'B', 'C'][Number(gradeLevel) - 1]} · ${subject}` : 'Ujian Online'}</b><p className="text-xs text-slate-600">Pilihan asesmenmu</p></div><button type="button" className="min-h-10 px-2 font-semibold text-[#356b9a] underline" onClick={() => { setEntryStage('choose'); setError('') }}>Ubah pilihan</button></div>
+        <a href={`/sso/start?next=${encodeURIComponent(nextPath)}`} className="flex min-h-12 w-full items-center justify-center rounded-full bg-[#0878ed] px-4 text-center font-semibold text-white hover:bg-blue-700">Masuk dengan akun LMS</a>
+        <p className="mt-2 text-center text-xs leading-relaxed text-slate-500">Masukkan username dan kata sandi di halaman LMS yang aman. CBT tidak menerima atau menyimpan kata sandi LMS.</p>
+        <div className="my-5 flex items-center gap-3 text-xs font-semibold text-slate-400"><span className="h-px flex-1 bg-slate-200"/>ATAU<span className="h-px flex-1 bg-slate-200"/></div>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1">{tab('student', 'NISN + kode')}{tab('student-account', 'Siswa lokal')}{tab('staff', 'Tutor / Admin')}</div>
+          {mode === 'student' ? <>
+            <Field label="NISN"><input required value={nisn} onChange={(e) => setNisn(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Masukkan NISN" autoComplete="username"/></Field>
+            <Field label="Kode akses ujian"><input required value={accessCode} onChange={(e) => setAccessCode(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" placeholder="Diberikan tutor" autoComplete="one-time-code"/></Field>
+          </> : mode === 'student-account' ? <>
+            <p className="rounded-xl bg-sky-50 p-3 text-sm text-sky-900">Akun siswa dari LMS gunakan tombol Masuk dengan akun LMS. Form ini hanya untuk akun CBT siswa lokal yang belum ditautkan.</p>
+            <Field label="Username siswa"><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field>
+            <Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field>
+          </> : <>
+            <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">Akun tutor yang tersinkron dari LMS masuk melalui SSO. Login ini hanya untuk akun CBT lokal darurat.</p>
+            <Field label="Username CBT"><input required value={username} onChange={(e) => setUsername(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="username"/></Field>
+            <Field label="Kata sandi"><input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="min-h-12 rounded-xl border border-slate-300 px-3" autoComplete="current-password"/></Field>
+          </>}
+          {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+          <Button type="submit" className="w-full bg-[#0878ed] hover:bg-blue-700" disabled={busy}>{busy ? 'Memeriksa…' : mode === 'student' ? 'Lihat ujian' : mode === 'student-account' ? 'Masuk sebagai siswa' : 'Masuk ke workspace'}</Button>
+        </form>
+        <p className="mt-5 border-t pt-4 text-center text-xs leading-relaxed text-slate-500">Simulasi mandiri PKBM Tunas Ilmu · Referensi alur: <a href="https://pusmendik.kemendikdasmen.go.id/tka/simulasi_tka/" target="_blank" rel="noreferrer" className="font-semibold text-[#356b9a] underline">Pusmendik</a>. Bukan aplikasi resmi pemerintah.</p>
+      </>}
     </Card>
   </main>
 }

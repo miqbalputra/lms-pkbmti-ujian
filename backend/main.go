@@ -1100,6 +1100,11 @@ func (s *Server) studentAssessments(c *fiber.Ctx) error {
 	if err := s.db.First(&student, "id = ? AND active = ?", account.PesertaDidikID, true).Error; err != nil {
 		return fiber.NewError(403, "Profil siswa tidak aktif")
 	}
+	gradeLevel := 0
+	var studentClass MasterKelas
+	if s.db.Select("jenjang").First(&studentClass, "id = ?", student.KelasID).Error == nil {
+		gradeLevel = studentClass.Jenjang
+	}
 	var candidates []Assessment
 	if err := s.db.Where("status = ? AND trashed_at IS NULL", "published").Order("starts_at asc nulls first, title asc").Find(&candidates).Error; err != nil {
 		return err
@@ -1124,7 +1129,7 @@ func (s *Server) studentAssessments(c *fiber.Ctx) error {
 				"id": assessment.ID, "kind": assessment.Kind, "title": assessment.Title,
 				"description": assessment.Description, "instructions": assessment.Instructions,
 				"classId": assessment.ClassID, "className": className, "subjectId": assessment.SubjectID,
-				"subjectName": subjectName, "room": assessment.Room, "durationMinute": assessment.DurationMinute,
+				"subjectName": subjectName, "gradeLevel": gradeLevel, "room": assessment.Room, "durationMinute": assessment.DurationMinute,
 				"startsAt": assessment.StartsAt, "endsAt": assessment.EndsAt,
 				"randomize": assessment.Randomize, "progressBar": assessment.ProgressBar,
 				"accessCodeRequired": assessment.AccessCodeHash != "",

@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test'
 
+async function startAtOnlineLogin(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: 'Beralih ke Ujian Online' }).click()
+  await page.getByRole('button', { name: 'Lanjutkan ke Ujian Online' }).click()
+}
+
 test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan melihat hasil', async ({ page }) => {
   let submitted = false
   const deadlineAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
@@ -50,6 +55,7 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
   })
 
   await page.goto('/')
+  await startAtOnlineLogin(page)
   await page.getByLabel('NISN').fill('0000000001')
   await page.getByLabel('Kode akses ujian').fill('123456')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
@@ -62,11 +68,14 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
   await page.getByRole('button', { name: 'Mulai tes' }).click()
 
   await expect(page.getByText('Pukul berapa kegiatan dimulai?')).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: 'Informasi soal' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await page.getByRole('button', { name: 'Kembali ke soal' }).click()
   const savedRequest = page.waitForRequest((request) => request.url().includes('/student/attempts/attempt-1/items/item-1/answer') && request.method() === 'PUT')
   await page.getByRole('radio', { name: /08\.00/ }).check()
   await savedRequest
   await page.getByRole('button', { name: 'Ragu-ragu' }).click()
-  await page.getByRole('button', { name: /Daftar soal/ }).click()
+  await page.getByRole('navigation', { name: 'Navigasi pengerjaan' }).getByRole('button', { name: 'Daftar soal' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Periksa & kirim' }).click()
   await expect(page.getByRole('dialog').getByText('Ditandai', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Konfirmasi & kirim' }).click()
@@ -97,6 +106,7 @@ test('token asesmen diverifikasi sebelum konfirmasi tes dan aksesnya muncul seba
     return json({ error: `Unmocked request: ${method} ${path}` }, 500)
   })
   await page.goto('/')
+  await startAtOnlineLogin(page)
   await page.getByLabel('NISN').fill('123456')
   await page.getByLabel('Kode akses ujian').fill('PORTAL')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
@@ -150,6 +160,7 @@ test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyi
   })
 
   await page.goto('/')
+  await startAtOnlineLogin(page)
   await page.getByLabel('NISN').fill('0000000002')
   await page.getByLabel('Kode akses ujian').fill('123456')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
@@ -205,6 +216,7 @@ test('portal siswa tidak melebar horizontal pada ponsel, tablet, dan desktop', a
     await page.goto('/')
     await page.evaluate(() => localStorage.clear())
     await page.reload()
+    await startAtOnlineLogin(page)
     await page.getByLabel('NISN').fill('0000000001')
     await page.getByLabel('Kode akses ujian').fill('123456')
     await page.getByRole('button', { name: 'Lihat ujian' }).click()
@@ -235,6 +247,7 @@ test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijan
   })
 
   await page.goto('/')
+  await startAtOnlineLogin(page)
   await page.getByLabel('NISN').fill('0000000003')
   await page.getByLabel('Kode akses ujian').fill('123456')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
@@ -261,7 +274,7 @@ test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijan
     if (viewport.width < 1024) {
       expect(metrics.navVisible).toBe(true)
       expect(metrics.targetsAtLeast44).toBe(true)
-      await page.getByRole('button', { name: /Daftar soal/ }).click()
+      await page.getByRole('navigation', { name: 'Navigasi pengerjaan' }).getByRole('button', { name: 'Daftar soal' }).click()
       const palette = page.getByRole('dialog', { name: 'Daftar soal' })
       await expect(palette.getByRole('button', { name: 'Soal 8, belum dijawab' })).toBeVisible()
       await palette.getByRole('button', { name: 'Soal 8, belum dijawab' }).click()
