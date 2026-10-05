@@ -145,6 +145,7 @@ function routePath(tab: string) {
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const [mode, setMode] = useState<'staff' | 'student' | 'student-account'>('student')
+  const [service, setService] = useState<'ujian_online' | 'simulasi'>('simulasi')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [nisn, setNisn] = useState('')
@@ -174,16 +175,21 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   }
   const tab = (value: 'student' | 'student-account' | 'staff', label: string) => <button type="button" onClick={() => { setMode(value); setError('') }} className={`min-h-12 rounded-lg px-2 text-xs font-bold sm:text-sm ${mode === value ? 'bg-white text-brand shadow' : 'text-slate-500'}`}>{label}</button>
 
-  return <main className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top,#d9f4f4,#f8fafc_46%)] p-4">
-    <Card className="w-full max-w-md overflow-hidden">
-      <div className="bg-brand p-7 text-white">
-        <div className="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-white/15"><GraduationCap/></div>
-        <p className="text-sm font-bold uppercase tracking-wider text-cyan-100">PKBM Tunas Ilmu</p>
-        <h1 className="mt-1 text-2xl font-bold">CBT & Asesmen</h1>
-        <p className="mt-2 text-sm text-cyan-50">Ruang aman untuk mengerjakan dan mengelola asesmen.</p>
+  return <main className="relative min-h-screen overflow-hidden bg-slate-50 px-4 pb-10 pt-24">
+    <div aria-hidden="true" className="absolute inset-x-0 top-0 h-56 bg-[linear-gradient(125deg,#2f6594,#3c78ad_58%,#315f89)]"/>
+    <header className="absolute inset-x-0 top-0 z-10 mx-auto flex max-w-6xl items-center gap-3 px-4 py-5 text-white"><span className="grid size-11 place-items-center rounded-full bg-white/15"><GraduationCap/></span><div><p className="text-sm font-black tracking-wide">PKBM TUNAS ILMU</p><p className="text-xs text-blue-100">CBT & Asesmen</p></div></header>
+    <Card className="relative mx-auto w-full max-w-md overflow-hidden border-0 shadow-xl">
+      <div className="p-6 pb-0 text-center sm:p-7 sm:pb-0">
+        <div className="mx-auto mb-3 grid size-14 place-items-center rounded-full bg-brand text-white shadow-lg"><GraduationCap/></div>
+        <p className="text-xs font-bold uppercase tracking-wider text-brand">Ruang Asesmen Sekolah</p>
+        <h1 className="mt-1 text-2xl font-bold">Selamat datang</h1>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">Masuk dengan akun sekolah untuk memilih ujian dan simulasi yang ditugaskan.</p>
       </div>
       <div className="p-5 pb-0 sm:px-6">
-        <a href="/sso/start" className="flex min-h-12 w-full items-center justify-center rounded-xl bg-brand px-4 text-center font-semibold text-white hover:bg-brand-dark">Masuk melalui akun LMS</a>
+        <p className="mb-2 text-center text-sm font-bold text-slate-800">1. Pilih jenis asesmen</p>
+        <div className="grid grid-cols-2 gap-2" role="group" aria-label="Pilih jenis asesmen"><button type="button" aria-pressed={service === 'ujian_online'} onClick={() => setService('ujian_online')} className={`min-h-14 rounded-xl border px-3 text-sm font-semibold transition ${service === 'ujian_online' ? 'border-brand bg-sky-50 text-brand ring-1 ring-brand' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>Ujian Online</button><button type="button" aria-pressed={service === 'simulasi'} onClick={() => setService('simulasi')} className={`min-h-14 rounded-xl border px-3 text-sm font-semibold transition ${service === 'simulasi' ? 'border-brand bg-sky-50 text-brand ring-1 ring-brand' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>Simulasi ANBK / TKA</button></div>
+        <p className="mb-2 mt-4 text-center text-sm font-bold text-slate-800">2. Masuk dengan akun sekolah</p>
+        <a href={`/sso/start?next=${encodeURIComponent(`/?jenis=${service}`)}`} className="flex min-h-12 w-full items-center justify-center rounded-xl bg-brand px-4 text-center font-semibold text-white hover:bg-brand-dark">Masuk melalui akun LMS</a>
         <p className="mt-2 text-center text-xs text-slate-500">Gunakan akun sekolah yang sama. LMS memverifikasi identitas dan peran Anda.</p>
       </div>
       <form onSubmit={submit} className="space-y-4 p-5 sm:p-6">

@@ -159,6 +159,7 @@ func main() {
 	api.Get("/question-media/:id", s.auth, s.downloadQuestionMedia)
 	student := api.Group("/student", s.auth, requireRoles("siswa"))
 	student.Get("/assessments", s.studentAssessments)
+	student.Post("/assessments/:id/verify", s.verifyStudentAssessment)
 	student.Get("/attempts", s.studentAttempts)
 	student.Post("/assessments/:id/start", s.startAttempt)
 	student.Get("/attempts/:id", s.studentAttempt)
@@ -1103,21 +1104,98 @@ func (s *Server) studentAssessments(c *fiber.Ctx) error {
 	if err := s.db.Where("status = ? AND trashed_at IS NULL", "published").Order("starts_at asc nulls first, title asc").Find(&candidates).Error; err != nil {
 		return err
 	}
-	rows := make([]Assessment, 0, len(candidates))
+	rows := make([]fiber.Map, 0, len(candidates))
 	for _, assessment := range candidates {
 		permitted, err := s.studentHasAssessmentAccess(student, assessment)
 		if err != nil {
 			return err
 		}
 		if permitted {
-			rows = append(rows, assessment)
+			className, subjectName := "", assessment.SubjectID
+			var class MasterKelas
+			if s.db.Select("nama").First(&class, "id = ?", assessment.ClassID).Error == nil {
+				className = class.Nama
+			}
+			var subject MasterMapel
+			if s.db.Select("nama").First(&subject, "id = ?", assessment.SubjectID).Error == nil && strings.TrimSpace(subject.Nama) != "" {
+				subjectName = subject.Nama
+			}
+			rows = append(rows, fiber.Map{
+				"id": assessment.ID, "kind": assessment.Kind, "title": assessment.Title,
+				"description": assessment.Description, "instructions": assessment.Instructions,
+				"classId": assessment.ClassID, "className": className, "subjectId": assessment.SubjectID,
+				"subjectName": subjectName, "room": assessment.Room, "durationMinute": assessment.DurationMinute,
+				"startsAt": assessment.StartsAt, "endsAt": assessment.EndsAt,
+				"randomize": assessment.Randomize, "progressBar": assessment.ProgressBar,
+				"accessCodeRequired": assessment.AccessCodeHash != "",
+			})
 		}
 	}
 	return c.JSON(rows)
 }
 
+func (s *Server) verifyStudentAssessment(c *fiber.Ctx) error {
+	account := currentAccount(c)
+	var input struct {
+		AccessCode string `json:"accessCode"`
+	}
+	if len(strings.TrimSpace(string(c.Body()))) > 0 {
+		if err := c.BodyParser(&input); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "Kode akses tidak valid")
+		}
+	}
+	var student MasterPeserta
+	if err := s.db.First(&student, "id = ? AND active = ?", account.PesertaDidikID, true).Error; err != nil {
+		return fiber.NewError(fiber.StatusForbidden, "Profil siswa tidak aktif")
+	}
+	var assessment Assessment
+	if err := s.db.First(&assessment, "id = ? AND status = ? AND trashed_at IS NULL", c.Params("id"), "published").Error; err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "Asesmen tidak tersedia")
+	}
+	permitted, err := s.studentHasAssessmentAccess(student, assessment)
+	if err != nil {
+		return err
+	}
+	if !permitted {
+		return fiber.NewError(fiber.StatusForbidden, "Anda tidak ditugaskan pada asesmen ini")
+	}
+	if !assessmentAccessCodeMatches(assessment, input.AccessCode) {
+		return fiber.NewError(fiber.StatusUnauthorized, "Token tidak sesuai. Periksa kembali token dari tutor.")
+	}
+	now := time.Now()
+	if assessment.StartsAt != nil && now.Before(*assessment.StartsAt) {
+		return fiber.NewError(fiber.StatusForbidden, "Asesmen belum dimulai sesuai jadwal")
+	}
+	if assessment.EndsAt != nil && now.After(*assessment.EndsAt) {
+		return fiber.NewError(fiber.StatusForbidden, "Waktu akses asesmen sudah berakhir")
+	}
+	className, subjectName := "", assessment.SubjectID
+	var class MasterKelas
+	if s.db.Select("nama").First(&class, "id = ?", student.KelasID).Error == nil {
+		className = class.Nama
+	}
+	var subject MasterMapel
+	if s.db.Select("nama").First(&subject, "id = ?", assessment.SubjectID).Error == nil && strings.TrimSpace(subject.Nama) != "" {
+		subjectName = subject.Nama
+	}
+	return c.JSON(fiber.Map{
+		"verified": true,
+		"student": fiber.Map{"id": student.ID, "name": student.Nama, "nisn": student.NISN, "className": className},
+		"assessment": fiber.Map{"id": assessment.ID, "title": assessment.Title, "kind": assessment.Kind, "subjectName": subjectName, "durationMinute": assessment.DurationMinute, "room": assessment.Room, "startsAt": assessment.StartsAt, "endsAt": assessment.EndsAt, "instructions": assessment.Instructions},
+		"serverTime": now.UTC(),
+	})
+}
+
 func (s *Server) startAttempt(c *fiber.Ctx) error {
 	account := currentAccount(c)
+	var input struct {
+		AccessCode string `json:"accessCode"`
+	}
+	if len(strings.TrimSpace(string(c.Body()))) > 0 {
+		if err := c.BodyParser(&input); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "Data mulai asesmen tidak valid")
+		}
+	}
 	var student MasterPeserta
 	if err := s.db.First(&student, "id = ? AND active = ?", account.PesertaDidikID, true).Error; err != nil {
 		return fiber.NewError(403, "Siswa tidak aktif")
@@ -1136,17 +1214,23 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 		if !permitted {
 			return fiber.NewError(403, "Anda tidak ditugaskan pada asesmen ini")
 		}
-		now := time.Now()
-		if assessment.StartsAt != nil && now.Before(*assessment.StartsAt) || assessment.EndsAt != nil && now.After(*assessment.EndsAt) {
-			return fiber.NewError(403, "Asesmen tidak berada dalam jadwal")
-		}
 		var previous []Attempt
 		if err := tx.Where("assessment_id = ? AND student_id = ?", assessment.ID, student.ID).Order("number desc").Find(&previous).Error; err != nil {
 			return err
 		}
 		if len(previous) > 0 && previous[0].Status == "started" {
+			if previous[0].DeadlineAt != nil && time.Now().After(*previous[0].DeadlineAt) {
+				return fiber.NewError(fiber.StatusForbidden, "Waktu percobaan sudah berakhir. Hubungi tutor jika perlu bantuan.")
+			}
 			attempt = previous[0]
 			return nil
+		}
+		now := time.Now()
+		if assessment.StartsAt != nil && now.Before(*assessment.StartsAt) || assessment.EndsAt != nil && now.After(*assessment.EndsAt) {
+			return fiber.NewError(403, "Asesmen tidak berada dalam jadwal")
+		}
+		if !assessmentAccessCodeMatches(assessment, input.AccessCode) {
+			return fiber.NewError(fiber.StatusUnauthorized, "Token wajib diisi dan harus sesuai sebelum ujian dimulai")
 		}
 		maxAttempts := assessment.MaxAttempts
 		if maxAttempts < 1 {

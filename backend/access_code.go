@@ -5,11 +5,23 @@ import (
 	"crypto/cipher"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"io"
 	"strings"
 )
+
+func assessmentAccessCodeMatches(assessment Assessment, raw string) bool {
+	if assessment.AccessCodeHash == "" {
+		return true
+	}
+	code := strings.TrimSpace(raw)
+	if code == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(assessment.AccessCodeHash), []byte(hash(code))) == 1
+}
 
 func assessmentCodeKey(secret string) []byte {
 	key := sha256.Sum256([]byte("pkbm-cbt-assessment-access-code-v1\x00" + secret))

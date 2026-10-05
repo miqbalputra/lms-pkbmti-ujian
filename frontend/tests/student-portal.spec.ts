@@ -18,6 +18,7 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
         instructions: 'Kerjakan dengan teliti.', durationMinute: 60,
       }])
     }
+    if (path === '/student/assessments/assessment-1/verify' && method === 'POST') return json({ verified: true, student: { id: 'student-1', name: 'Siswa Uji', nisn: '0000000001', className: 'Paket A' } })
     if (path === '/student/attempts' && method === 'GET') {
       return json(submitted ? [{ id: 'attempt-1', assessmentId: 'assessment-1', title: 'Latihan Literasi', kind: 'ujian_online', status: 'completed', number: 1, resultAvailable: true, score: 1 }] : [])
     }
@@ -52,10 +53,13 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
   await page.getByLabel('NISN').fill('0000000001')
   await page.getByLabel('Kode akses ujian').fill('123456')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
-  await page.getByRole('button', { name: 'Baca instruksi' }).click()
-  await expect(page.getByText('Sebelum mulai', { exact: true })).toBeVisible()
-  await expect(page.getByText('Nama: Siswa Uji')).toBeVisible()
-  await page.getByRole('button', { name: 'Saya siap, mulai' }).click()
+  await page.getByRole('button', { name: 'Pilih asesmen' }).click()
+  await expect(page.getByRole('heading', { name: 'Konfirmasi data peserta' })).toBeVisible()
+  await expect(page.getByText('Siswa Uji', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Verifikasi & lanjutkan' }).click()
+  await expect(page.getByRole('heading', { name: 'Konfirmasi tes' })).toBeVisible()
+  await page.getByLabel(/Saya memastikan data peserta benar/).check()
+  await page.getByRole('button', { name: 'Mulai tes' }).click()
 
   await expect(page.getByText('Pukul berapa kegiatan dimulai?')).toBeVisible()
   const savedRequest = page.waitForRequest((request) => request.url().includes('/student/attempts/attempt-1/items/item-1/answer') && request.method() === 'PUT')
@@ -69,6 +73,45 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
 
   await expect(page.getByText('Hasil asesmen', { exact: true })).toBeVisible()
   await expect(page.getByText('Nilai: 1')).toBeVisible()
+})
+
+test('token asesmen diverifikasi sebelum konfirmasi tes dan aksesnya muncul sebagai deep link', async ({ page }) => {
+  let tokenSentToStart = ''
+  await page.route('**/api/**', async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname.replace('/api', '')
+    const method = request.method()
+    const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
+    if (path === '/public/ujian-online/cek' && method === 'POST') return json({ accessToken: 'token-session', student: { id: 'student-token', nama: 'Siswa Token' } })
+    if (path === '/student/assessments' && method === 'GET') return json([{ id: 'assessment-token', kind: 'simulasi', title: 'Simulasi TKA', subjectName: 'Matematika', durationMinute: 60, accessCodeRequired: true }])
+    if (path === '/student/attempts' && method === 'GET') return json([])
+    if (path === '/student/assessments/assessment-token/verify' && method === 'POST') {
+      const body = request.postDataJSON() as { accessCode: string }
+      return body.accessCode === 'TKA-2026' ? json({ verified: true, student: { id: 'student-token', name: 'Siswa Token', nisn: '123456', className: 'Paket A' } }) : json({ error: 'Token tidak sesuai. Periksa kembali token dari tutor.' }, 401)
+    }
+    if (path === '/student/assessments/assessment-token/start' && method === 'POST') {
+      tokenSentToStart = (request.postDataJSON() as { accessCode: string }).accessCode
+      return json({ id: 'attempt-token', assessmentId: 'assessment-token', status: 'started', deadlineAt: new Date(Date.now() + 60_000).toISOString() })
+    }
+    if (path === '/student/attempts/attempt-token' && method === 'GET') return json({ attempt: { id: 'attempt-token', assessmentId: 'assessment-token', status: 'started', deadlineAt: new Date(Date.now() + 60_000).toISOString() }, serverTime: new Date().toISOString(), items: [] })
+    return json({ error: `Unmocked request: ${method} ${path}` }, 500)
+  })
+  await page.goto('/')
+  await page.getByLabel('NISN').fill('123456')
+  await page.getByLabel('Kode akses ujian').fill('PORTAL')
+  await page.getByRole('button', { name: 'Lihat ujian' }).click()
+  await page.getByRole('button', { name: 'Pilih asesmen' }).click()
+  await expect(page.getByLabel('Token asesmen')).toBeVisible()
+  await page.getByLabel('Token asesmen').fill('SALAH')
+  await page.getByRole('button', { name: 'Verifikasi & lanjutkan' }).click()
+  await expect(page.getByRole('alert').getByText(/Token tidak sesuai/)).toBeVisible()
+  await page.getByLabel('Token asesmen').fill('TKA-2026')
+  await page.getByRole('button', { name: 'Verifikasi & lanjutkan' }).click()
+  await expect(page).toHaveURL(/tahap=konfirmasi/)
+  await expect(page.getByRole('heading', { name: 'Konfirmasi tes' })).toBeVisible()
+  await page.getByLabel(/Saya memastikan data peserta benar/).check()
+  await page.getByRole('button', { name: 'Mulai tes' }).click()
+  await expect.poll(() => tokenSentToStart).toBe('TKA-2026')
 })
 
 test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyimpan revisi secara sadar', async ({ page }) => {
@@ -85,6 +128,7 @@ test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyi
 
     if (path === '/public/ujian-online/cek' && method === 'POST') return json({ accessToken: 'conflict-session', student: { id: 'student-conflict', nama: 'Siswa Konflik' } })
     if (path === '/student/assessments' && method === 'GET') return json([{ id: 'assessment-conflict', kind: 'ujian_online', title: 'Latihan Konflik', durationMinute: 60 }])
+    if (path === '/student/assessments/assessment-conflict/verify' && method === 'POST') return json({ verified: true, student: { id: 'student-conflict', name: 'Siswa Konflik' } })
     if (path === '/student/attempts' && method === 'GET') return json(attemptStarted ? [{ id: 'attempt-conflict', assessmentId: 'assessment-conflict', title: 'Latihan Konflik', kind: 'ujian_online', status: 'started', number: 1, resultAvailable: false }] : [])
     if (path === '/student/assessments/assessment-conflict/start' && method === 'POST') {
       attemptStarted = true
@@ -109,8 +153,10 @@ test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyi
   await page.getByLabel('NISN').fill('0000000002')
   await page.getByLabel('Kode akses ujian').fill('123456')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
-  await page.getByRole('button', { name: 'Baca instruksi' }).click()
-  await page.getByRole('button', { name: 'Saya siap, mulai' }).click()
+  await page.getByRole('button', { name: 'Pilih asesmen' }).click()
+  await page.getByRole('button', { name: 'Verifikasi & lanjutkan' }).click()
+  await page.getByLabel(/Saya memastikan data peserta benar/).check()
+  await page.getByRole('button', { name: 'Mulai tes' }).click()
   await expect(page.getByText('Pilihan dari server')).toBeVisible()
 
   simulateOffline = true
@@ -134,8 +180,7 @@ test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyi
   // Another device saves revision 1 while this browser still has a local answer based on revision 0.
   savedRevision = 1
   await page.reload()
-  await page.getByRole('button', { name: 'Lanjutkan' }).click()
-  await page.getByRole('button', { name: 'Lanjutkan percobaan' }).click()
+  await page.getByRole('button', { name: 'Lanjutkan pengerjaan' }).click()
 
   await expect(page.getByRole('heading', { name: 'Jawaban berubah di perangkat lain' })).toBeVisible()
   await expect(page.getByRole('radio', { name: 'Perangkat' })).toBeChecked()
@@ -163,7 +208,7 @@ test('portal siswa tidak melebar horizontal pada ponsel, tablet, dan desktop', a
     await page.getByLabel('NISN').fill('0000000001')
     await page.getByLabel('Kode akses ujian').fill('123456')
     await page.getByRole('button', { name: 'Lihat ujian' }).click()
-    await expect(page.getByRole('heading', { name: 'Asesmen untukmu' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Pilih asesmen' })).toBeVisible()
     const dimensions = await page.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width)
   }
@@ -173,7 +218,7 @@ test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijan
   const deadlineAt = new Date(Date.now() + 45 * 60 * 1000).toISOString()
   const items = Array.from({ length: 8 }, (_, index) => ({
     id: `item-${index + 1}`, position: index + 1, flagged: index === 2, answer: null, revision: 0,
-    question: { id: `question-${index + 1}`, title: `Pertanyaan ${index + 1}`, type: 'pg_tunggal', prompt: `Soal uji responsif ${index + 1}?`, points: 1, config: { choices: [{ id: 'a', text: 'Jawaban A' }, { id: 'b', text: 'Jawaban B' }] } },
+    question: { id: `question-${index + 1}`, title: `Pertanyaan ${index + 1}`, type: 'pg_tunggal', prompt: `Soal uji responsif ${index + 1}?`, points: 1, ...(index === 0 ? { stimulus: [{ type: 'text', title: 'Bacaan singkat', content: 'Ini adalah stimulus yang dibaca sebelum menjawab pertanyaan.' }] } : {}), config: { choices: [{ id: 'a', text: 'Jawaban A' }, { id: 'b', text: 'Jawaban B' }] } },
   }))
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -183,6 +228,7 @@ test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijan
     if (path === '/public/ujian-online/cek' && method === 'POST') return json({ accessToken: 'responsive-attempt', student: { id: 'student-responsive', nama: 'Siswa Responsif' } })
     if (path === '/student/assessments' && method === 'GET') return json([{ id: 'assessment-responsive', kind: 'simulasi', title: 'Simulasi Responsif', durationMinute: 45 }])
     if (path === '/student/attempts' && method === 'GET') return json([])
+    if (path === '/student/assessments/assessment-responsive/verify' && method === 'POST') return json({ verified: true, student: { id: 'student-responsive', name: 'Siswa Responsif' } })
     if (path === '/student/assessments/assessment-responsive/start' && method === 'POST') return json({ id: 'attempt-responsive', assessmentId: 'assessment-responsive', status: 'started', deadlineAt })
     if (path === '/student/attempts/attempt-responsive' && method === 'GET') return json({ attempt: { id: 'attempt-responsive', assessmentId: 'assessment-responsive', status: 'started', deadlineAt }, serverTime: new Date().toISOString(), items })
     return json({ error: `Unmocked request: ${method} ${path}` }, 500)
@@ -192,9 +238,12 @@ test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijan
   await page.getByLabel('NISN').fill('0000000003')
   await page.getByLabel('Kode akses ujian').fill('123456')
   await page.getByRole('button', { name: 'Lihat ujian' }).click()
-  await page.getByRole('button', { name: 'Baca instruksi' }).click()
-  await page.getByRole('button', { name: 'Saya siap, mulai' }).click()
+  await page.getByRole('button', { name: 'Pilih asesmen' }).click()
+  await page.getByRole('button', { name: 'Verifikasi & lanjutkan' }).click()
+  await page.getByLabel(/Saya memastikan data peserta benar/).check()
+  await page.getByRole('button', { name: 'Mulai tes' }).click()
   await expect(page.getByText('Soal uji responsif 1?')).toBeVisible()
+  await expect(page.getByLabel('Bahan bacaan atau stimulus')).toBeVisible()
 
   for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
     await page.setViewportSize(viewport)

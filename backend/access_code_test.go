@@ -61,6 +61,19 @@ func TestAssessmentCodeHashAndCiphertextStayInSync(t *testing.T) {
 	}
 }
 
+func TestPublishedAssessmentAccessCodeGate(t *testing.T) {
+	assessment := Assessment{AccessCodeHash: hash("TKA-2026")}
+	if assessmentAccessCodeMatches(assessment, "") || assessmentAccessCodeMatches(assessment, "TKA-2025") {
+		t.Fatal("a configured assessment token must reject empty and incorrect values")
+	}
+	if !assessmentAccessCodeMatches(assessment, "  TKA-2026  ") {
+		t.Fatal("valid tokens should tolerate accidental surrounding whitespace")
+	}
+	if !assessmentAccessCodeMatches(Assessment{}, "") {
+		t.Fatal("assessments without a configured token should remain accessible to assigned students")
+	}
+}
+
 func TestAssessmentJSONNeverSerializesAccessCodeStorage(t *testing.T) {
 	data, err := json.Marshal(Assessment{AccessCodeHash: "one-way-hash", AccessCodeCiphertext: "encrypted-value"})
 	if err != nil {
