@@ -138,7 +138,7 @@ func (s *Server) internalForm(c *fiber.Ctx) error {
 		return fiber.NewError(403, "Akses kolaborator dicabut")
 	}
 	if c.Params("action") == "authorize" {
-		return c.JSON(fiber.Map{"role": role, "frozen": d.Frozen, "userId": a.ID, "name": a.Nama})
+		return c.JSON(fiber.Map{"role": role, "frozen": d.Frozen, "revision": d.Revision, "userId": a.ID, "name": a.Nama})
 	}
 	if c.Params("action") == "publish" {
 		v, err := s.publishFormDocument(a, d, in.Revision)
@@ -174,6 +174,7 @@ func (s *Server) registerForms(api fiber.Router, staff fiber.Router) {
 	staff.Get("/forms/:kind/:id", guard, s.getForm)
 	staff.Put("/forms/:kind/:id", guard, s.saveForm)
 	staff.Post("/forms/:kind/:id/publish", guard, s.publishForm)
+	staff.Post("/forms/:kind/:id/unpublish", guard, s.unpublishFormResource)
 	staff.Post("/forms/:kind/:id/copy", guard, s.copyForm)
 	staff.Get("/forms/:kind/:id/preview", guard, s.formPreview)
 	staff.Get("/forms/:kind/:id/usage", guard, s.formUsage)

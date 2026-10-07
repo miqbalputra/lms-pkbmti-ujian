@@ -110,7 +110,7 @@ func (s *Server) protectFormAdapter(c *fiber.Ctx) error {
 			return fiber.NewError(409, "Paket ini menggunakan editor kolaboratif. Ubah melalui kanvas agar semua perangkat tetap sinkron.")
 		}
 	}
-	if id != "" && strings.HasPrefix(path, "/api/staff/questions/") && !strings.HasSuffix(path, "/revision") {
+	if id != "" && strings.HasPrefix(path, "/api/staff/questions/") && !strings.HasSuffix(path, "/revision") && !strings.HasSuffix(path, "/unpublish") {
 		var count int64
 		if err := s.db.Model(&FormDocument{}).Where("materialized_json LIKE ?", "%\""+id+"\"%").Count(&count).Error; err != nil {
 			return err

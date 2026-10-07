@@ -57,6 +57,8 @@ const server = new Server({
   async onAuthenticate({token,documentName,connectionConfig}) {
     if(metadata.get(documentName)?.publication)throw new Error('Publication synchronization in progress; retry')
     const auth=await request(documentName,'authorize',{ticket:token})
+    const cached=metadata.get(documentName)
+    if(cached){cached.revision=auth.revision;cached.frozen=auth.frozen}
     connectionConfig.readOnly=auth.frozen || !['owner','editor'].includes(auth.role)
     return {ticket:token,role:auth.role}
   },

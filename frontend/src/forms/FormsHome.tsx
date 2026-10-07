@@ -60,6 +60,18 @@ export function FormsHome({
       setBusy(false);
     }
   }
+  async function unpublish(row: (typeof rows)[number]) {
+    const label = kind === "assessment" ? "asesmen" : "paket soal";
+    const warning = kind === "assessment"
+      ? "Peserta baru tidak dapat memulai setelah dibatalkan. Jika masih ada siswa yang sedang mengerjakan, sistem akan meminta Anda menunggu sampai mereka selesai. Hasil dan snapshot lama tetap tersimpan."
+      : "Paket dan seluruh butirnya kembali menjadi draf. Snapshot asesmen lama tetap tersimpan.";
+    if (!window.confirm("Batalkan terbit " + label + " “" + row.title + "”? " + warning)) return;
+    try {
+      await api("/staff/forms/" + kind + "/" + encodeURIComponent(row.id) + "/unpublish", { method: "POST" }, session);
+      setRows((current) => current.map((item) => item.id === row.id ? { ...item, status: "draft", updatedAt: new Date().toISOString() } : item));
+      setError("");
+    } catch (e) { setError((e as Error).message || "Penerbitan belum dapat dibatalkan."); }
+  }
   const search = params.get("q") || "",
     status = params.get("tab") || "all";
   const update = (key: string, value: string) => {
@@ -136,28 +148,31 @@ export function FormsHome({
       {loading && <p role="status">Memuat paket…</p>}
       <div className="form-home-grid">
         {visible.map((row) => (
-          <Link
-            key={row.id}
-            className="form-card grid gap-4"
-            to={`/editor/${kind}/${row.id}`}
-          >
-            <span className="text-xs font-semibold uppercase text-brand">
-              {row.status === "draft"
-                ? "Draf"
-                : row.status === "published"
-                  ? "Diterbitkan"
-                  : "Arsip"}
-            </span>
-            <h2 className="text-lg font-semibold">{row.title}</h2>
-            <p className="text-xs text-slate-500">
-              {row.subject || ""} ·{" "}
-              {new Date(row.updatedAt).toLocaleDateString("id-ID")}
-            </p>
-            <span className="flex items-center gap-2 font-semibold text-brand">
-              {row.role === "editor" ? "Dibagikan · Edit" : row.role === "grader" ? "Dibagikan · Nilai" : row.status === "draft" ? "Buka editor" : "Lihat versi"}
-              <ArrowRight size={16} />
-            </span>
-          </Link>
+          <article key={row.id} className="form-card grid gap-3">
+            <Link className="grid gap-3 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand" to={`/editor/${kind}/${row.id}`}>
+              <span className="text-xs font-semibold uppercase text-brand">
+                {row.status === "draft"
+                  ? "Draf"
+                  : row.status === "published"
+                    ? "Diterbitkan"
+                    : "Arsip"}
+              </span>
+              <h2 className="text-lg font-semibold">{row.title}</h2>
+              <p className="text-xs text-slate-500">
+                {row.subject || ""} ·{" "}
+                {new Date(row.updatedAt).toLocaleDateString("id-ID")}
+              </p>
+              <span className="flex items-center gap-2 font-semibold text-brand">
+                {row.role === "editor" ? "Dibagikan · Edit" : row.role === "grader" ? "Dibagikan · Nilai" : row.status === "draft" ? "Buka editor" : "Lihat versi"}
+                <ArrowRight size={16} />
+              </span>
+            </Link>
+            {row.status === "published" && row.role === "owner" && session.user.role !== "kepala_sekolah" && (
+              <button type="button" className="min-h-11 justify-self-start rounded-xl border border-amber-300 bg-amber-50 px-4 font-semibold text-amber-900 hover:bg-amber-100" onClick={() => void unpublish(row)}>
+                Batal Terbit
+              </button>
+            )}
+          </article>
         ))}
       </div>
       {!loading && !visible.length && (
