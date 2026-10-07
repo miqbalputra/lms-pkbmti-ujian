@@ -219,7 +219,8 @@ func main() {
 	student.Get("/attempts/:id/files/:fileId", s.downloadAttemptFile)
 	student.Post("/attempts/:id/submit", s.submitAttempt)
 	student.Post("/attempts/:id/recovery", s.submitLateRecovery)
-	staff := api.Group("/staff", s.auth, requireRoles("admin", "guru", "kepala_sekolah"))
+	staff := api.Group("/staff", s.auth, requireRoles("admin", "guru", "kepala_sekolah"), headTeacherReadOnly)
+	staff.Get("/dashboard/summary", s.dashboardSummary)
 	s.registerForms(api, staff)
 	staff.Get("/questions", s.listQuestions)
 	staff.Get("/question-folders", s.listQuestionFolders)
@@ -2291,6 +2292,15 @@ func (s *Server) createAccount(c *fiber.Ctx) error {
 	if input.Role == "siswa" && strings.TrimSpace(input.PesertaDidikID) == "" {
 		return fiber.NewError(400, "Akun siswa harus terhubung ke peserta didik")
 	}
+	if input.Role == "siswa" {
+		var student MasterPeserta
+		if err := s.db.Where("id = ? AND active = ?", strings.TrimSpace(input.PesertaDidikID), true).First(&student).Error; err != nil {
+			return fiber.NewError(400, "Akun siswa harus terhubung ke peserta didik aktif dari LMS")
+		}
+		if strings.TrimSpace(input.Nama) == "" {
+			input.Nama = student.Nama
+		}
+	}
 	password, _ := hashPassword(input.Password)
 	active := true
 	if input.Active != nil {
@@ -2307,6 +2317,9 @@ func (s *Server) resetPassword(c *fiber.Ctx) error {
 	var row CBTAccount
 	if err := s.db.First(&row, "id = ?", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Akun tidak ditemukan")
+	}
+	if row.SourceUserID != "" {
+		return fiber.NewError(fiber.StatusConflict, "Akun ini dikelola LMS. Atur ulang kata sandi melalui LMS.")
 	}
 	var input struct {
 		Password string `json:"password"`

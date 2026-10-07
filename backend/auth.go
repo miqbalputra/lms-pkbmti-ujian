@@ -89,6 +89,13 @@ func requireRoles(roles ...string) fiber.Handler {
 		return fiber.NewError(403, "Anda tidak memiliki akses untuk tindakan ini")
 	}
 }
+
+func headTeacherReadOnly(c *fiber.Ctx) error {
+	if currentAccount(c).Role == "kepala_sekolah" && c.Method() != fiber.MethodGet && c.Method() != fiber.MethodHead && c.Method() != fiber.MethodOptions {
+		return fiber.NewError(fiber.StatusForbidden, "Kepala sekolah hanya dapat melihat")
+	}
+	return c.Next()
+}
 func hashPassword(raw string) (string, error) {
 	value, err := bcrypt.GenerateFromPassword([]byte(raw), bcrypt.DefaultCost)
 	return string(value), err

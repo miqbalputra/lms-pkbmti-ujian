@@ -27,11 +27,11 @@ test('tutor baru mengikuti alur beranda → formulir baru tanpa mencari menu', a
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Buat formulir asesmen' })).toBeVisible()
+  await expect(page.getByText('Ruang kerja tutor', { exact: true })).toBeVisible()
   await expect(page.getByText('Susun pertanyaan', { exact: true })).toBeVisible()
   await expect(page.getByText('Pilih peserta', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Buat asesmen' }).click()
-  await expect(page.getByText('Formulir dan asesmen', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Buat Ujian Online' }).click()
+  await expect(page.getByRole('heading', { name: 'Ujian Online' })).toBeVisible()
   await expect(page.getByText('Cara paling mudah')).toBeVisible()
 
   await page.getByRole('button', { name: 'Buat formulir baru' }).click()

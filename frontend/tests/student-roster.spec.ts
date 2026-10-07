@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures'
+import { expect, navigateStaff, test } from './fixtures'
 
 test('direktori CBT menampilkan NIS, NISN, kelas, kelompok belajar, dan status dari LMS', async ({ page }) => {
   await page.route('**/api/**', async (route) => {
@@ -22,7 +22,7 @@ test('direktori CBT menampilkan NIS, NISN, kelas, kelompok belajar, dan status d
   await page.getByLabel('Username CBT').fill('tutor')
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
-  await page.getByRole('button', { name: 'Data Siswa' }).click()
+  await navigateStaff(page, 'Data Siswa')
 
   await expect(page.getByRole('heading', { name: 'Kelas & peserta didik' })).toBeVisible()
   await expect(page.getByText('Total siswa tersalin')).toBeVisible()

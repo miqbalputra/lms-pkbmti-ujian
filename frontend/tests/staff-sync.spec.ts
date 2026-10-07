@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures'
+import { expect, navigateStaff, test } from './fixtures'
 
 test('status sinkronisasi menampilkan kegagalan LMS, menyimpan hitungan terakhir, lalu pulih saat retry berhasil', async ({ page }) => {
   let syncAttempts = 0
@@ -40,7 +40,7 @@ test('status sinkronisasi menampilkan kegagalan LMS, menyimpan hitungan terakhir
   await page.getByLabel('Username CBT').fill('admin')
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
-  await page.getByRole('button', { name: 'Sinkronisasi' }).click()
+  await navigateStaff(page, 'Sinkronisasi')
   await page.getByRole('button', { name: 'Sinkronkan sekarang' }).click()
   await expect(page.getByRole('alert')).toContainText('CBT_INTEGRATION_KEY_ID dan CBT_INTEGRATION_HMAC_SECRET')
   await expect(page.getByText('Sinkronisasi terakhir gagal')).toBeVisible()

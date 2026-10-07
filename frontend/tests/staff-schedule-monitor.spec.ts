@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures'
+import { expect, navigateStaff, test } from './fixtures'
 
 test('staff can inspect class schedule and a live participant monitor', async ({ page }) => {
   let monitorReads = 0
@@ -36,12 +36,12 @@ test('staff can inspect class schedule and a live participant monitor', async ({
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
 
-  await page.getByRole('button', { name: 'Jadwal' }).click()
+  await navigateStaff(page, 'Jadwal')
   await expect(page.getByRole('heading', { name: 'Jadwal per kelas dan ruang' })).toBeVisible()
   await expect(page.getByText('Ujian Paket A')).toBeVisible()
   await expect(page.getByText('Paket A 6 · Lab Komputer · Ujian Online')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Monitor live' }).click()
+  await navigateStaff(page, 'Monitor live')
   await expect(page.getByRole('heading', { name: 'Monitor ujian live' })).toBeVisible()
   await expect(page.getByText('Siswa Satu')).toBeVisible()
   await expect(page.getByRole('cell', { name: 'Mengerjakan' })).toBeVisible()

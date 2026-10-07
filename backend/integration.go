@@ -494,6 +494,9 @@ func (s *Server) syncHistory(c *fiber.Ctx) error {
 	return c.JSON(runs)
 }
 func (s *Server) runSync(c *fiber.Ctx) error {
+	if currentAccount(c).Role == "kepala_sekolah" {
+		return fiber.NewError(fiber.StatusForbidden, "Kepala sekolah hanya dapat melihat status sinkronisasi")
+	}
 	run, err := s.recordMasterSync("manual", currentAccount(c).ID)
 	if err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": run.Message, "syncRun": run})
