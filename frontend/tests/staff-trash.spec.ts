@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('kepala sekolah dapat membaca bank soal tanpa kontrol perubahan', async ({ page }) => {
   const question = {
@@ -8,6 +8,7 @@ test('kepala sekolah dapat membaca bank soal tanpa kontrol perubahan', async ({ 
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown) => route.fulfill({ status: 200, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'viewer-session', user: { id: 'viewer-1', username: 'kepsek', nama: 'Kepala Sekolah', role: 'kepala_sekolah' } })
@@ -43,6 +44,7 @@ test('tutor dapat menghapus soal ke Trash dan memulihkannya', async ({ page }) =
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
 
@@ -96,6 +98,7 @@ test('tutor dapat mengarsipkan dan memindahkan paket ke Trash, lalu memulihkanny
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })
@@ -141,6 +144,7 @@ test('soal yang dihapus dari kanvas builder masuk Trash bank soal', async ({ pag
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })

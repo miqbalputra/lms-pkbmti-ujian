@@ -4,14 +4,21 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { api, ApiError, type Session } from './api'
 import { QuestionAnswerControl, StimulusContent, type AnswerFile, type StudentQuestion } from './QuestionAnswerControl'
 import { getQueuedAnswers, removeQueuedAnswer, saveQueuedAnswer, type QueuedAnswer } from './studentAnswerQueue'
+import { takeEntryCode } from './forms/StudentEntry'
+import './forms/tka.css'
+import { TkaExamPlayer } from './forms/TkaExamPlayer'
+import {TkaPreflight} from './forms/TkaPreflight'
+import { readableAnswer } from './answerText'
+import type { FormHeaderImage } from './forms/types'
 
 type Assessment = { id: string; kind: string; title: string; description?: string; instructions?: string; room?: string; className?: string; subjectName?: string; gradeLevel?: number; durationMinute: number; startsAt?: string; endsAt?: string; accessCodeRequired?: boolean }
 type Attempt = { id: string; assessmentId: string; status: string; deadlineAt?: string; score?: number }
 type AttemptItem = { id: string; position: number; flagged: boolean; answer?: string; revision: number; question: StudentQuestion }
 type HistoryRow = { id: string; assessmentId: string; title: string; kind: string; status: string; deadlineAt?: string; number: number; resultAvailable: boolean; score?: number }
-type VerifiedCandidate = { id: string; name: string; nis?: string; nisn?: string; className?: string }
+type VerifiedCandidate = { id: string; name: string; nis?: string; nisn?: string; className?: string; gender?: string; learningGroup?: string }
 type Notice = { kind: 'ok' | 'error'; text: string } | null
-type Result = { available: boolean; status: string; pendingManual: boolean; title: string; score?: number; className?: string; showReview?: boolean; items?: Array<{ position: number; question: StudentQuestion; answer: string; correct?: boolean; score: number; weight: number }> }
+type FormDisplay = {title:string;themeColor?:string;font?:string;progressBar?:boolean;confirmationMessage?:string;headerImage?:FormHeaderImage|null}
+type Result = { attemptId?:string;canEdit?:boolean; available: boolean; status: string; pendingManual: boolean; title: string; score?: number; className?: string; showReview?: boolean; items?: Array<{ position: number; question: StudentQuestion; answer: string; correct?: boolean; score: number; weight: number }> }
 
 const parseAnswer = (raw?: string): unknown => {
   if (!raw) return ''
@@ -30,7 +37,7 @@ function Action({ children, variant = 'primary', className = '', ...props }: Rea
 }
 function StatusNote({ value }: { value: Notice }) { return value ? <div role="alert" className={`rounded-xl border p-3 text-sm ${value.kind === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{value.text}</div> : null }
 
-export function StudentPortal({ session, onLogout }: { session: Session; onLogout: () => void }) {
+export function StudentPortal({ session, onLogout, formsEnabled=false }: { session: Session; onLogout: () => void; formsEnabled?:boolean }) {
   const location = useLocation()
   const navigate = useNavigate()
   const [assessments, setAssessments] = useState<Assessment[]>([])
@@ -39,6 +46,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   const [wizardStep, setWizardStep] = useState<'identity' | 'confirm'>('identity')
   const [accessCode, setAccessCode] = useState('')
   const [verifiedCandidate, setVerifiedCandidate] = useState<VerifiedCandidate | null>(null)
+  const [rosterIdentity,setRosterIdentity]=useState<VerifiedCandidate|null>(null)
   const [verifyBusy, setVerifyBusy] = useState(false)
   const [confirmAccepted, setConfirmAccepted] = useState(false)
   const [assessmentFilter, setAssessmentFilter] = useState<'semua' | 'ujian_online' | 'simulasi'>('semua')
@@ -47,6 +55,8 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   const [subjectFilter, setSubjectFilter] = useState('')
   const [attempt, setAttempt] = useState<Attempt | null>(null)
   const [items, setItems] = useState<AttemptItem[]>([])
+  const [activeItemIds,setActiveItemIds]=useState<string[]|null>(null)
+  const [formDisplay,setFormDisplay]=useState<FormDisplay|null>(null)
   const [index, setIndex] = useState(0)
   const [notice, setNotice] = useState<Notice>(null)
   const [now, setNow] = useState(Date.now())
@@ -62,6 +72,10 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   const [resultLoading, setResultLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [queueCount, setQueueCount] = useState(0)
+  const [openingAttemptId, setOpeningAttemptId] = useState('')
+  const [attemptLoadError, setAttemptLoadError] = useState<string | null>(null)
+  const attemptLoadGeneration = useRef(0)
+  const attemptOpening = useRef(false)
   const timers = useRef(new Map<string, number>())
   const pending = useRef(new Map<string, QueuedAnswer>())
   const inFlight = useRef(new Set<string>())
@@ -70,6 +84,11 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   const expiredSubmit = useRef(false)
   const studentIdentity = session.user.pesertaDidikId || session.user.id
   const assessmentRouteId = location.pathname.match(/^\/siswa\/asesmen\/([^/]+)$/)?.[1]
+  const attemptRouteId=location.pathname.match(/^\/siswa\/upaya\/([^/]+)$/)?.[1]
+  const resultRouteId=location.pathname.match(/^\/siswa\/hasil\/([^/]+)$/)?.[1]
+  useEffect(()=>{if(formsEnabled&&!resultRouteId)setResult(null)},[formsEnabled,resultRouteId])
+  useEffect(()=>{if(formsEnabled&&resultRouteId){setResultLoading(true);void api<Result>(`/student/attempts/${encodeURIComponent(resultRouteId)}/results`,{},session).then(setResult).catch(e=>setNotice({kind:'error',text:e.message})).finally(()=>setResultLoading(false))}},[formsEnabled,resultRouteId,session.accessToken])
+  useEffect(()=>{if(formsEnabled)void api<VerifiedCandidate>('/student/identity',{},session).then(setRosterIdentity).catch(e=>setNotice({kind:'error',text:e.message}))},[formsEnabled,session.accessToken])
 
   useEffect(() => { latestItems.current = items }, [items])
   useEffect(() => { latestAttempt.current = attempt }, [attempt])
@@ -99,7 +118,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
     setSelected(row)
     setWizardStep('identity')
     setVerifiedCandidate(null)
-    setAccessCode('')
+    setAccessCode(takeEntryCode())
     setConfirmAccepted(false)
   }, [assessmentRouteId, assessments, loading, navigate])
   useEffect(() => {
@@ -119,54 +138,96 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   }, [])
 
   const openAttempt = useCallback(async (attemptId: string) => {
+    const generation = ++attemptLoadGeneration.current
+    attemptOpening.current = true
+    setOpeningAttemptId(attemptId)
+    setAttemptLoadError(null)
+    for (const timer of timers.current.values()) window.clearTimeout(timer)
+    timers.current.clear()
     try {
-      const data = await api<{ attempt: Attempt; items: AttemptItem[]; serverTime?: string }>(`/student/attempts/${attemptId}`, {}, session)
-      for (const timer of timers.current.values()) window.clearTimeout(timer)
-      timers.current.clear(); pending.current.clear(); inFlight.current.clear()
-      latestAttempt.current = data.attempt
-      setAttempt(data.attempt)
-      setSelected(null)
-      navigate('/', { replace: true })
-      setItems(data.items)
-      setIndex(0)
-      setAnswerConflicts([])
-      expiredSubmit.current = false
-      if (data.serverTime) setServerOffset(new Date(data.serverTime).getTime() - Date.now())
-      const localRows = await getQueuedAnswers(studentIdentity, data.attempt.id).catch(() => [])
+      const data = await api<{ attempt: Attempt; items: AttemptItem[]; activeItemIds?:string[]; serverTime?: string; display?:FormDisplay }>(`/student/attempts/${attemptId}`, {}, session)
+      const offset = data.serverTime ? new Date(data.serverTime).getTime() - Date.now() : 0
+      if (generation !== attemptLoadGeneration.current) return
+      const requested=window.location.pathname===`/siswa/upaya/${attemptId}`?Math.max(1,Number(new URLSearchParams(window.location.search).get('soal'))||1):1
+      // Do not expose answer controls until restoration is complete. Otherwise
+      // the delayed IndexedDB read can overwrite an answer just entered here.
+      // A read failure must not silently hide unsynchronised local work.
+      const localRows = await getQueuedAnswers(studentIdentity, data.attempt.id)
+      if (generation !== attemptLoadGeneration.current) return
       const localByItem = new Map(localRows.map((row) => [row.itemId, row]))
+      const restoredPending = new Map<string, QueuedAnswer>()
       const conflicts: string[] = []
+      const acknowledged: string[] = []
       const restored = data.items.map((row) => {
         const local = localByItem.get(row.id)
         if (!local) return row
-        pending.current.set(row.id, local)
+        // A lost HTTP acknowledgement must not resurrect a change that is
+        // already durable on the server or display a false revision conflict.
+        if (row.answer && JSON.stringify(parseAnswer(row.answer)) === JSON.stringify(parseAnswer(local.value))) {
+          acknowledged.push(local.key)
+          return row
+        }
+        restoredPending.set(row.id, local)
         if (local.baseRevision !== row.revision) conflicts.push(row.id)
         return { ...row, answer: local.value }
       })
+      await Promise.all(acknowledged.map((key) => removeQueuedAnswer(key))).catch(() => {})
+      if (generation !== attemptLoadGeneration.current) return
+      pending.current = restoredPending
+      inFlight.current.clear()
+      latestAttempt.current = data.attempt
       latestItems.current = restored
+      setAttempt(data.attempt)
       setItems(restored)
-      setQueueCount(localRows.length)
+      setFormDisplay(data.display||null)
+      setActiveItemIds(data.activeItemIds||null)
+      setSelected(null)
+      setIndex(Math.max(0,Math.min(data.items.length-1,requested-1)))
+      expiredSubmit.current = false
+      setServerOffset(offset)
+      setQueueCount(restoredPending.size)
       setAnswerConflicts(conflicts)
       setLateReview(false)
       if (conflicts.length) {
         setSaveState('conflict')
         setNotice({ kind: 'error', text: `${conflicts.length} jawaban berbeda dengan versi terbaru di server. Pilih versi yang ingin dipertahankan sebelum melanjutkan.` })
-      } else if (localRows.length) setNotice({ kind: 'ok', text: 'Ada jawaban yang belum tersinkron dari perangkat ini. Kami akan mencoba menyimpannya saat tersambung.' })
-      if (navigator.onLine && localRows.length) window.setTimeout(() => { for (const row of localRows) if (!conflicts.includes(row.itemId)) void flushItem(row.itemId) }, 0)
-    } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Percobaan tidak dapat dibuka.' }) }
-  }, [session, studentIdentity, navigate])
+      } else if (restoredPending.size) {
+        setSaveState(navigator.onLine ? 'saving' : 'offline')
+        setNotice({ kind: 'ok', text: 'Ada jawaban yang belum tersinkron dari perangkat ini. Kami akan mencoba menyimpannya saat tersambung.' })
+      } else { setSaveState('saved'); setNotice(null) }
+      attemptOpening.current = false
+      setOpeningAttemptId('')
+      navigate(formsEnabled?`/siswa/upaya/${encodeURIComponent(attemptId)}?soal=${requested}`:'/', { replace: true })
+      if (navigator.onLine && localRows.length) window.setTimeout(() => {
+        if (generation !== attemptLoadGeneration.current) return
+        for (const row of localRows) if (!conflicts.includes(row.itemId)) void flushItem(row.itemId)
+      }, 0)
+    } catch (error) {
+      if (generation !== attemptLoadGeneration.current) return
+      const text = error instanceof Error ? error.message : 'Percobaan tidak dapat dibuka.'
+      setAttemptLoadError(text)
+      setNotice({ kind: 'error', text })
+    }
+  }, [session, studentIdentity, navigate,formsEnabled])
+  const restoredRoute=useRef('')
+  useEffect(()=>{if(formsEnabled&&attemptRouteId&&attemptRouteId!==attempt?.id&&restoredRoute.current!==attemptRouteId){restoredRoute.current=attemptRouteId;void openAttempt(attemptRouteId)}},[attemptRouteId,attempt?.id,formsEnabled,openAttempt])
 
   const flushItem = useCallback(async (itemId: string): Promise<boolean> => {
     const record = pending.current.get(itemId)
     const currentAttempt = latestAttempt.current
+    const generation = attemptLoadGeneration.current
+    if (attemptOpening.current) return false
     if (!record || !currentAttempt || inFlight.current.has(itemId)) return !record
     if (!navigator.onLine) { setSaveState('offline'); return false }
     inFlight.current.add(itemId)
     setSaveState('saving')
     try {
-      const response = await api<{ revision: number }>(`/student/attempts/${currentAttempt.id}/items/${itemId}/answer`, { method: 'PUT', body: JSON.stringify({ value: JSON.parse(record.value) as unknown, revision: record.baseRevision }) }, session)
+      const response = await api<{ revision: number; activeItemIds?:string[] }>(`/student/attempts/${currentAttempt.id}/items/${itemId}/answer`, { method: 'PUT', headers: record.commandId ? { 'Idempotency-Key': record.commandId } : {}, body: JSON.stringify({ value: JSON.parse(record.value) as unknown, revision: record.baseRevision }) }, session)
+      if (generation !== attemptLoadGeneration.current) return false
+      if(response.activeItemIds)setActiveItemIds(response.activeItemIds)
       const currentPending = pending.current.get(itemId)
       setItems((current) => current.map((row) => row.id === itemId ? { ...row, revision: response.revision } : row))
-      if (currentPending?.updatedAt === record.updatedAt) {
+      if (currentPending && (currentPending.commandId || currentPending.updatedAt) === (record.commandId || record.updatedAt)) {
         pending.current.delete(itemId)
         await removeQueuedAnswer(record.key).catch(() => undefined)
       } else if (currentPending) {
@@ -181,6 +242,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
       if (!left) setNotice({ kind: 'ok', text: 'Semua jawaban sudah tersimpan di server.' })
       return true
     } catch (error) {
+      if (generation !== attemptLoadGeneration.current) return false
       if (error instanceof ApiError && error.status === 409) {
         setAnswerConflicts((current) => current.includes(itemId) ? current : [...current, itemId])
         setSaveState('conflict')
@@ -188,7 +250,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
       setQueueCount(pending.current.size)
       setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Jawaban belum tersinkron. Jawaban lokal tetap disimpan.' })
       return false
-    } finally { inFlight.current.delete(itemId) }
+    } finally { if (generation === attemptLoadGeneration.current) inFlight.current.delete(itemId) }
   }, [session])
 
   async function resolveAnswerConflicts(choice: 'server' | 'device') {
@@ -212,7 +274,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
         const row = pending.current.get(itemId)
         const revision = revisions.get(itemId)
         if (!row || revision === undefined) throw new Error('Versi server terbaru tidak lengkap. Muat ulang percobaan lalu coba lagi.')
-        const rebased = { ...row, baseRevision: revision, updatedAt: Date.now() }
+        const rebased = { ...row, baseRevision: revision, updatedAt: Date.now(), commandId: crypto.randomUUID() }
         pending.current.set(itemId, rebased)
         await saveQueuedAnswer(rebased)
       }
@@ -230,8 +292,9 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   }
 
   function changeAnswer(item: AttemptItem, value: unknown) {
+    if (attemptOpening.current) return
     const serialized = JSON.stringify(value)
-    const record: QueuedAnswer = { key: queueKey(studentIdentity, attempt?.id || '', item.id), studentId: studentIdentity, attemptId: attempt?.id || '', itemId: item.id, value: serialized, baseRevision: item.revision, updatedAt: Date.now() }
+    const record: QueuedAnswer = { key: queueKey(studentIdentity, attempt?.id || '', item.id), studentId: studentIdentity, attemptId: attempt?.id || '', itemId: item.id, value: serialized, baseRevision: item.revision, updatedAt: Date.now(), commandId: crypto.randomUUID() }
     pending.current.set(item.id, record)
     setItems((current) => current.map((row) => row.id === item.id ? { ...row, answer: serialized } : row))
     setSaveState('saving')
@@ -307,11 +370,11 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
     } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Penanda belum tersimpan.' }) }
   }
   async function submitConfirmed() {
-    if (!attempt || !navigator.onLine || remaining === 0) { setNotice({ kind: 'error', text: remaining === 0 ? 'Waktu telah berakhir. Jawaban yang belum tersinkron dapat diajukan untuk peninjauan tutor.' : 'Pengiriman memerlukan koneksi internet. Jawaban tersimpan di perangkat dan akan disinkronkan saat online.' }); return }
+    if (!attempt || !navigator.onLine || remaining === 0) { setNotice({ kind: 'error', text: remaining === 0 ? 'Waktu telah berakhir. Jawaban yang belum tersinkron dapat diajukan untuk peninjauan tutor.' : 'Pengiriman memerlukan koneksi internet. Jawaban tersimpan di perangkat dan akan disinkronkan saat online.' }); return false }
     const pendingIds = [...pending.current.keys()]
     for (const id of pendingIds) {
       const saved = await flushItem(id)
-      if (!saved) return
+      if (!saved) return false
     }
     try {
       const response = await api<{ status: string; score: number; showResult: boolean }>(`/student/attempts/${attempt.id}/submit`, { method: 'POST' }, session)
@@ -319,8 +382,9 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
       setSummaryOpen(false)
       setNotice({ kind: 'ok', text: response.showResult ? `Jawaban terkirim. Nilai: ${response.score}` : 'Jawaban berhasil dikirim. Hasil mengikuti kebijakan asesmen.' })
       await reloadLists()
-      if (response.showResult) await showResult(attempt.id)
-    } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Pengiriman jawaban gagal.' }) }
+      if (response.showResult || formsEnabled) await showResult(attempt.id)
+      return true
+    } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Pengiriman jawaban gagal.' }); return false }
   }
   async function uploadFile(item: AttemptItem, file: File): Promise<AnswerFile> {
     if (!attempt) throw new Error('Percobaan belum dimulai.')
@@ -339,21 +403,25 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   }
   async function showResult(attemptId: string) {
     setResultLoading(true)
-    try { setResult(await api<Result>(`/student/attempts/${attemptId}/results`, {}, session)) }
+    try { setResult(await api<Result>(`/student/attempts/${attemptId}/results`, {}, session)); if(formsEnabled)navigate(`/siswa/hasil/${encodeURIComponent(attemptId)}`) }
     catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Hasil belum dapat dibuka.' }) }
     finally { setResultLoading(false) }
+  }
+  async function editSubmittedResponse() {
+    if(!result?.attemptId)return;
+    try{const resumed=await api<Attempt>(`/student/attempts/${result.attemptId}/reopen`,{method:'POST',body:JSON.stringify({requestId:crypto.randomUUID()})},session);setResult(null);await openAttempt(resumed.id)}catch(error){setNotice({kind:'error',text:(error as Error).message})}
   }
 
   async function expireAttempt() {
     const current = latestAttempt.current
-    if (!current || expiredSubmit.current || !navigator.onLine) return
+    if (!current || attemptOpening.current || expiredSubmit.current || !navigator.onLine) return
     try {
       const response = await api<{ status: string; score: number; showResult: boolean }>(`/student/attempts/${current.id}/submit`, { method: 'POST' }, session)
       expiredSubmit.current = true
       setAttempt({ ...current, status: response.status, score: response.score })
       setNotice({ kind: 'ok', text: pending.current.size ? 'Waktu berakhir. Jawaban tersimpan server sudah dikunci; perubahan lokal dapat diajukan terpisah untuk ditinjau tutor.' : 'Waktu berakhir dan jawaban yang tersimpan di server telah dikunci.' })
       if (pending.current.size) setLateReview(true)
-      else if (response.showResult) await showResult(current.id)
+      else if (response.showResult || formsEnabled) await showResult(current.id)
       await reloadLists()
     } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Penutupan asesmen sedang diproses server.' }) }
   }
@@ -376,6 +444,9 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   const remaining = attempt?.deadlineAt ? Math.max(0, new Date(attempt.deadlineAt).getTime() - (now + serverOffset)) : 0
   const timerText = `${String(Math.floor(remaining / 3600000)).padStart(2, '0')}:${String(Math.floor(remaining / 60000) % 60).padStart(2, '0')}:${String(Math.floor(remaining / 1000) % 60).padStart(2, '0')}`
   const active = Boolean(attempt && ['started'].includes(attempt.status))
+  const visibleItems=activeItemIds?items.filter(i=>activeItemIds.includes(i.id)):items
+  const visibleIndex=Math.max(0,visibleItems.findIndex(i=>i.id===item?.id))
+  useEffect(()=>{if(!formsEnabled||attemptRouteId!==attempt?.id)return;const n=Math.max(0,Number(new URLSearchParams(location.search).get('soal')||1)-1);const target=visibleItems[n];if(target)setIndex(items.findIndex(i=>i.id===target.id))},[formsEnabled,attemptRouteId,attempt?.id,location.search,activeItemIds,items.length])
 
   useEffect(() => {
     if (attempt?.deadlineAt && remaining === 0 && active && !expiredSubmit.current && navigator.onLine) void expireAttempt()
@@ -387,7 +458,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   }, [serverOffset])
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
-      if (!active || event.altKey === false || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
+      if (formsEnabled || !active || event.altKey === false || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
       const target = event.target as HTMLElement
       if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return
       event.preventDefault()
@@ -395,7 +466,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [active, items.length])
+  }, [active, items.length,formsEnabled])
   useEffect(() => {
     if (!paletteOpen) return
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPaletteOpen(false) }
@@ -403,11 +474,14 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [paletteOpen])
 
-  if (result) return <main className="min-h-screen bg-slate-50 p-4"><div className="mx-auto max-w-3xl space-y-4"><Panel className="overflow-hidden"><div className="bg-brand p-6 text-white"><p className="text-sm font-bold uppercase tracking-wide text-cyan-100">Hasil asesmen</p><h1 className="mt-1 text-2xl font-bold">{result.title}</h1></div><div className="space-y-4 p-6"><p className="text-slate-700">{result.available ? `Nilai: ${result.score}` : result.pendingManual ? 'Jawaban uraian/berkas sedang menunggu penilaian tutor.' : 'Hasil belum dirilis oleh tutor.'}</p>{result.className && <p className="text-sm text-slate-500">Kelas saat ujian: {result.className}</p>}{result.items?.map((row) => <article className="rounded-xl border p-4" key={row.position}><p className="font-semibold">{row.position}. {row.question.prompt}</p><p className="mt-2 text-sm text-slate-600">Jawabanmu: {String(parseAnswer(row.answer) || 'Belum dijawab')}</p><p className="mt-1 text-sm">Skor {row.score} dari {row.weight}</p></article>)}<Action onClick={() => { setResult(null); void reloadLists() }}>Kembali ke daftar asesmen</Action></div></Panel></div></main>
+  if (openingAttemptId) return <main className="grid min-h-screen place-items-center bg-slate-50 p-4"><Panel className="w-full max-w-xl space-y-4 p-6">{attemptLoadError ? <><h1 className="text-xl font-bold">Pengerjaan belum dapat dipulihkan</h1><p role="alert" className="text-rose-800">{attemptLoadError}</p><p className="text-sm text-slate-600">Jawaban lokal tidak dihapus. Coba lagi agar versi server dan perangkat dipulihkan sebelum melanjutkan.</p><Action onClick={() => void openAttempt(openingAttemptId)}>Coba lagi</Action></> : <><h1 className="text-xl font-bold">Memulihkan pengerjaan</h1><p role="status" className="text-slate-600">Memuat jawaban server dan perangkat…</p><p className="text-sm text-slate-500">Mohon tunggu sebelum menjawab. Waktu ujian tetap mengikuti tenggat server.</p></>}</Panel></main>
+
+if (result) return <main className="min-h-screen bg-slate-50 p-4"><div className="mx-auto max-w-3xl space-y-4"><Panel className="overflow-hidden"><div className="bg-brand p-6 text-white"><p className="text-sm font-bold uppercase tracking-wide text-cyan-100">Hasil asesmen</p><h1 className="mt-1 text-2xl font-bold">{result.title}</h1></div><div className="space-y-4 p-6"><p className="text-slate-700">{result.available ? `Nilai: ${result.score}` : result.pendingManual ? 'Jawaban uraian/berkas sedang menunggu penilaian tutor.' : 'Hasil belum dirilis oleh tutor.'}</p>{result.className && <p className="text-sm text-slate-500">Kelas saat ujian: {result.className}</p>}{result.items?.map((row) => <article className="rounded-xl border p-4" key={row.position}><p className="font-semibold">{row.position}. {row.question.prompt}</p><p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">Jawabanmu: {readableAnswer(row.question,parseAnswer(row.answer))}</p><p className="mt-1 text-sm">Skor {row.score} dari {row.weight}</p></article>)}{result.canEdit&&<Action variant="secondary" onClick={()=>void editSubmittedResponse()}>Edit respons (riwayat tetap dicatat)</Action>}<StatusNote value={notice}/><Action onClick={() => { setResult(null); if(formsEnabled)navigate('/'); void reloadLists() }}>Kembali ke daftar asesmen</Action></div></Panel></div></main>
 
   if (lateReview && attempt) return <main className="grid min-h-screen place-items-center bg-slate-50 p-4"><Panel className="w-full max-w-xl space-y-4 p-6"><p className="text-xs font-bold uppercase tracking-wider text-amber-800">Waktu ujian berakhir</p><h1 className="text-2xl font-bold">Jawaban lokal belum tersinkron</h1><p className="text-slate-600">Ada {pending.current.size} jawaban yang hanya tersimpan di perangkat ini. Kamu dapat mengajukannya kepada tutor untuk ditinjau. Pengajuan ini tidak langsung mengubah nilai.</p><StatusNote value={notice}/><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Action variant="secondary" onClick={() => setLateReview(false)}>Kembali ke riwayat</Action><Action onClick={() => void sendLateRecovery()} disabled={!navigator.onLine || !pending.current.size}><Send className="size-4"/>Ajukan ke tutor</Action></div></Panel></main>
 
   if (selected && !attempt) {
+    if(formsEnabled)return <TkaPreflight assessment={selected} student={verifiedCandidate||rosterIdentity} step={wizardStep} code={accessCode} onCode={setAccessCode} onVerify={()=>void verifyCandidate()} onBack={closeAssessmentFlow} onStart={()=>void startSelected()} onIdentity={()=>{setWizardStep('identity');setVerifiedCandidate(null);navigate(`/siswa/asesmen/${selected.id}?tahap=data`)}} accepted={confirmAccepted} onAccepted={setConfirmAccepted} busy={verifyBusy} notice={<StatusNote value={notice}/>} resume={resumeAttempt?()=>void openAttempt(resumeAttempt.id):undefined}/>
     return <main className="relative min-h-screen overflow-hidden bg-[#f4f7fb] pt-28">
       <div aria-hidden="true" className="absolute inset-x-0 top-0 h-52 overflow-hidden bg-[#356b9a]"><div className="absolute inset-0 opacity-40 [background-image:linear-gradient(32deg,transparent_0_17%,rgba(255,255,255,.12)_17.2%_35%,transparent_35.2%),linear-gradient(145deg,transparent_0_28%,rgba(17,87,147,.55)_28.2%_56%,transparent_56.2%)]"/></div>
       <header className="absolute inset-x-0 top-0 z-10 mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 text-white"><div className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-full border border-white/30 bg-white/10"><GraduationCap/></span><div><p className="text-sm font-black tracking-wide">PKBM TUNAS ILMU</p><p className="text-xs text-blue-100">SIMULASI ANBK · TKA</p></div></div><Action variant="secondary" className="min-h-11" onClick={closeAssessmentFlow}><ChevronLeft className="size-4"/>Kembali</Action></header>
@@ -431,6 +505,7 @@ export function StudentPortal({ session, onLogout }: { session: Session; onLogou
   }
 
   if (attempt && active && item) {
+if(formsEnabled)return <TkaExamPlayer headerImage={formDisplay?.headerImage} themeColor={formDisplay?.themeColor} formFont={formDisplay?.font} progressBar={formDisplay?.progressBar} title={formDisplay?.title||assessments.find(a=>a.id===attempt.assessmentId)?.title||'Asesmen'} student={session.user.nama} items={visibleItems} index={visibleIndex} onIndex={n=>{setIndex(items.findIndex(i=>i.id===visibleItems[n]?.id));navigate(`/siswa/upaya/${attempt.id}?soal=${n+1}`)}} onAnswer={(row,value)=>changeAnswer(row as AttemptItem,value)} onFlag={row=>void toggleFlag(row as AttemptItem)} onSubmit={submitConfirmed} timeText={timerText} remaining={remaining} saveState={saveState} queueCount={queueCount} accessToken={session.accessToken} notice={<><StatusNote value={notice}/>{answerConflicts.length>0&&<div className="form-notice"><p>Jawaban berubah di perangkat lain.</p><button className="form-button secondary" onClick={()=>void resolveAnswerConflicts('server')}>Gunakan server</button><button className="form-button" onClick={()=>void resolveAnswerConflicts('device')}>Pertahankan perangkat</button></div>}{saveState==='error'&&<button className="form-button secondary" onClick={retryPendingAnswers}>Coba sinkronkan</button>}</>} onFileUpload={(row,file)=>uploadFile(row as AttemptItem,file)} onFileRemove={(row,id)=>removeFile(row as AttemptItem,id)} onFileDownload={(id,name)=>void downloadFile(id,name)}/>
     return <div className="min-h-screen bg-slate-100">
       <header className="sticky top-0 z-20 bg-[#356b9a] text-white shadow-sm"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 sm:px-5 sm:py-3"><div className="flex min-w-0 items-center gap-2.5"><span className="grid size-9 shrink-0 place-items-center rounded-full border border-white/30 bg-white/10"><GraduationCap className="size-5"/></span><div className="min-w-0"><b className="block truncate text-sm sm:text-base">PKBM Tunas Ilmu · CBT</b><p className="truncate text-xs text-blue-100 sm:text-sm">{session.user.nama} · Soal {index + 1} dari {items.length}</p></div></div><div className="flex flex-wrap items-center justify-end gap-1 sm:gap-2"><span aria-label={saveState === 'saved' ? 'Tersimpan' : saveState === 'saving' ? 'Menyimpan' : saveState === 'offline' ? `Offline, ${queueCount} jawaban lokal` : saveState === 'conflict' ? 'Perlu pilih versi' : 'Gagal menyimpan'} className="inline-flex min-h-10 items-center justify-center gap-1 rounded-xl px-2 text-white sm:min-h-11 sm:text-sm">{saveState === 'offline' || !navigator.onLine ? <CloudOff className="size-4"/> : <Cloud className="size-4"/>}<span className="hidden sm:inline">{saveState === 'saved' ? 'Tersimpan' : saveState === 'saving' ? 'Menyimpan…' : saveState === 'offline' ? `Offline · ${queueCount} lokal` : saveState === 'conflict' ? 'Perlu pilih versi' : 'Gagal menyimpan'}</span></span><span aria-live="polite" className={`inline-flex min-h-10 items-center gap-1.5 rounded-xl px-2 font-mono text-sm font-bold sm:min-h-11 sm:gap-2 sm:px-3 sm:text-base ${remaining <= 300000 ? 'bg-rose-600' : remaining <= 900000 ? 'bg-amber-300 text-slate-950' : 'bg-white/15'}`}><Clock3 className="size-4"/><span>{timerText}</span></span><Action variant="secondary" className="min-h-10 gap-1.5 px-2 sm:min-h-11 sm:px-3" onClick={() => setInfoOpen(true)} aria-label="Informasi soal"><Info className="size-4"/><span className="hidden sm:inline">Informasi soal</span></Action><span className="hidden lg:block"><Action variant="secondary" className="min-h-10 gap-1.5 px-2 sm:min-h-11 sm:px-3" onClick={() => setPaletteOpen(true)} aria-label="Daftar soal"><ListChecks className="size-4"/><span className="hidden sm:inline">Daftar soal</span></Action></span><Action variant="secondary" className="min-h-10 gap-1.5 px-2 sm:min-h-11 sm:px-3" onClick={() => setFontSize((size) => size === 15 ? 18 : size === 18 ? 22 : 15)} aria-label={`Ukuran teks ${fontSize} piksel`}><Type className="size-4"/><span className="text-xs">{fontSize}</span></Action></div></div></header>
       <main className="mx-auto grid max-w-7xl gap-4 p-3 pb-24 sm:p-5 sm:pb-28 lg:grid-cols-[230px_minmax(0,1fr)] lg:pb-5">

@@ -6,6 +6,7 @@ export type QueuedAnswer = {
   value: string
   baseRevision: number
   updatedAt: number
+  commandId?: string
 }
 
 const databaseName = 'pkbm-cbt-local-answers'
@@ -40,13 +41,13 @@ export async function saveQueuedAnswer(answer: QueuedAnswer): Promise<void> {
 
 export async function getQueuedAnswers(studentId: string, attemptId: string): Promise<QueuedAnswer[]> {
   const database = await openDatabase()
-  const rows = await new Promise<QueuedAnswer[]>((resolve, reject) => {
-    const request = database.transaction(storeName, 'readonly').objectStore(storeName).getAll()
-    request.onsuccess = () => resolve((request.result as QueuedAnswer[]).filter((row) => row.studentId === studentId && row.attemptId === attemptId))
-    request.onerror = () => reject(request.error || new Error('Antrean jawaban lokal gagal dibaca.'))
-  })
-  database.close()
-  return rows
+  try {
+    return await new Promise<QueuedAnswer[]>((resolve, reject) => {
+      const request = database.transaction(storeName, 'readonly').objectStore(storeName).getAll()
+      request.onsuccess = () => resolve((request.result as QueuedAnswer[]).filter((row) => row.studentId === studentId && row.attemptId === attemptId))
+      request.onerror = () => reject(request.error || new Error('Antrean jawaban lokal gagal dibaca.'))
+    })
+  } finally { database.close() }
 }
 
 export async function removeQueuedAnswer(key: string): Promise<void> {

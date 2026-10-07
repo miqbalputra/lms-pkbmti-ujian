@@ -2,6 +2,10 @@
 
 Aplikasi mandiri untuk Bank Soal, Ujian Online, Simulasi, penilaian, dan laporan.
 
+Panduan kanvas kolaboratif, alur peserta, feature flag, dan gerbang rilis:
+[Editor Forms dan ruang siswa TKA](docs/FORMS-ROLLOUT.md). Fitur baru tetap
+nonaktif secara default sampai verifikasi staging dan pilot selesai.
+
 ## Menjalankan lokal
 
 1. Salin `.env.example` menjadi `.env` dan isi nilai rahasia.

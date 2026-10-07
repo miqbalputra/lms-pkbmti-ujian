@@ -1,9 +1,10 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('pencarian Bank Soal menapis judul dan isi secara langsung', async ({ page }) => {
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown) => route.fulfill({ status: 200, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('staff can inspect class schedule and a live participant monitor', async ({ page }) => {
   let monitorReads = 0
@@ -8,6 +8,7 @@ test('staff can inspect class schedule and a live participant monitor', async ({
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && request.method() === 'POST') return json({ accessToken: 'admin-session', user: { id: 'admin-1', username: 'admin', nama: 'Admin CBT', role: 'admin' } })
     if (path === '/staff/schedule') return json(schedule)

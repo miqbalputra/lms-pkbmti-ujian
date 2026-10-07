@@ -20,6 +20,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -98,7 +99,43 @@ func shuffledAssessmentItems(items []AssessmentItem, attemptSeed, assessmentID s
 	rows := append([]AssessmentItem(nil), items...)
 	first, second := deterministicShuffleSeed(attemptSeed, assessmentID)
 	random := rand.New(rand.NewPCG(first, second))
-	random.Shuffle(len(rows), func(i, j int) { rows[i], rows[j] = rows[j], rows[i] })
+	// Keep shared stimuli and section/branch dependencies intact. Legacy items
+	// without grouping metadata retain the same flat deterministic shuffle.
+	groups := map[string][]AssessmentItem{}
+	keys := []string{}
+	for rowIndex, row := range rows {
+		var snap questionSnapshot
+		_ = json.Unmarshal([]byte(row.SnapshotJSON), &snap)
+		config := configObject(snap.ConfigJSON)
+		section := asString(config["sectionId"])
+		key := asString(config["stimulusGroupId"])
+		if section != "" || len(mapFrom(config["branchToByAnswer"])) > 0 {
+			key = "section:" + section
+		} else if key != "" {
+			key = "stimulus:" + key
+		} else {
+			key = fmt.Sprintf("item:%d", rowIndex)
+		}
+		if _, ok := groups[key]; !ok {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], row)
+	}
+	// A sectioned document is kept in its authored dependency order; only
+	// unsectioned, independent stimulus groups are shuffled.
+	sectioned := false
+	for _, key := range keys {
+		if strings.HasPrefix(key, "section:") {
+			sectioned = true
+		}
+	}
+	if !sectioned {
+		random.Shuffle(len(keys), func(i, j int) { keys[i], keys[j] = keys[j], keys[i] })
+	}
+	rows = rows[:0]
+	for _, key := range keys {
+		rows = append(rows, groups[key]...)
+	}
 	return rows, random
 }
 
@@ -140,6 +177,7 @@ func main() {
 	}
 	app := fiber.New(fiber.Config{ErrorHandler: apiError, BodyLimit: 20 * 1024 * 1024, EnableTrustedProxyCheck: true, TrustedProxies: cfg.TrustedProxies})
 	app.Use(securityHeaders())
+	app.Use(s.embedHeaders())
 	app.Use(httpsRedirect(cfg.ForceHTTPS, cfg.PublicBaseURL))
 	app.Use(hidePoweredBy())
 	app.Use(cors.New(cors.Config{AllowOrigins: cfg.PublicBaseURL, AllowHeaders: "Origin, Content-Type, Authorization, X-Request-ID", AllowCredentials: false}))
@@ -154,16 +192,26 @@ func main() {
 		account := currentAccount(c)
 		return c.JSON(fiber.Map{"id": account.ID, "username": account.Username, "nama": account.Nama, "role": account.Role, "pesertaDidikId": account.PesertaDidikID})
 	})
-	api.Post("/public/ujian-online/cek", s.publicExamLogin)
-	api.Get("/public/config", func(c *fiber.Ctx) error { return c.JSON(fiber.Map{"publicBaseUrl": s.cfg.PublicBaseURL}) })
+	participantLimit := participantRateLimit()
+	api.Use("/public", limiter.New(limiter.Config{Max: 2000, Expiration: time.Minute, LimitReached: func(c *fiber.Ctx) error {
+		return c.Status(429).JSON(fiber.Map{"error": "Batas akses jaringan tercapai. Tunggu sebentar lalu coba lagi."})
+	}}))
+	api.Post("/public/ujian-online/cek", participantLimit, s.publicExamLogin)
+	api.Post("/public/assessments/resolve", participantLimit, s.resolveAssessmentCode)
+	api.Post("/public/assessments/login", participantLimit, s.publicExamLogin)
+	api.Get("/public/config", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"publicBaseUrl": s.cfg.PublicBaseURL, "formsEnabled": env("CBT_FORMS_ENABLED", "false") == "true"})
+	})
 	api.Get("/question-media/:id", s.auth, s.downloadQuestionMedia)
 	student := api.Group("/student", s.auth, requireRoles("siswa"))
+	student.Get("/identity", s.studentRosterIdentity)
 	student.Get("/assessments", s.studentAssessments)
 	student.Post("/assessments/:id/verify", s.verifyStudentAssessment)
 	student.Get("/attempts", s.studentAttempts)
 	student.Post("/assessments/:id/start", s.startAttempt)
 	student.Get("/attempts/:id", s.studentAttempt)
 	student.Get("/attempts/:id/results", s.studentAttemptResult)
+	student.Post("/attempts/:id/reopen", s.reopenFormResponse)
 	student.Put("/attempts/:id/items/:itemId/answer", s.saveAnswer)
 	student.Put("/attempts/:id/items/:itemId/flag", s.flagAttemptItem)
 	student.Post("/attempts/:id/items/:itemId/files", s.uploadAttemptFile)
@@ -172,8 +220,10 @@ func main() {
 	student.Post("/attempts/:id/submit", s.submitAttempt)
 	student.Post("/attempts/:id/recovery", s.submitLateRecovery)
 	staff := api.Group("/staff", s.auth, requireRoles("admin", "guru", "kepala_sekolah"))
+	s.registerForms(api, staff)
 	staff.Get("/questions", s.listQuestions)
 	staff.Get("/question-folders", s.listQuestionFolders)
+	staff.Use(s.protectFormAdapter)
 	staff.Post("/question-folders", s.createQuestionFolder)
 	staff.Put("/question-folders/:id", s.updateQuestionFolder)
 	staff.Delete("/question-folders/:id", s.deleteQuestionFolder)
@@ -234,6 +284,7 @@ func main() {
 	staff.Get("/master/students", s.listStudents)
 	staff.Get("/master/classes", s.listClasses)
 	staff.Get("/master/groups", s.listLearningGroups)
+	staff.Get("/master/subjects", s.listSubjects)
 	staff.Post("/master/classes/manual-label", s.createManualClassLabel)
 	staff.Get("/sync/status", s.syncStatus)
 	staff.Get("/sync/history", s.syncHistory)
@@ -262,15 +313,32 @@ func apiError(c *fiber.Ctx, err error) error {
 	return c.Status(code).JSON(fiber.Map{"error": message})
 }
 func (s *Server) migrate() error {
-	// Older CBT releases enforced a unique index on NISN. The LMS intentionally
-	// shares a temporary placeholder NISN across multiple learners, so remove
-	// that index before AutoMigrate recreates the field as a normal lookup index.
-	if s.db.Migrator().HasIndex(&MasterPeserta{}, "NISN") {
-		if err := s.db.Migrator().DropIndex(&MasterPeserta{}, "NISN"); err != nil {
-			return fmt.Errorf("remove obsolete unique index on master student NISN: %w", err)
+	// Schema/index changes commit together. A failed additive migration must
+	// retain the previous uniqueness constraints as well as all legacy records.
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Local accounts/attempts have no imported source ID. Keep uniqueness for
+		// nonempty source IDs without making the second local row fail. No data changes.
+		for _, index := range []string{"idx_cbt_accounts_source_user_id", "idx_attempts_source_attempt_id"} {
+			var definition string
+			if err := tx.Raw("SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ?", index).Scan(&definition).Error; err != nil {
+				return err
+			}
+			if definition != "" && !strings.Contains(strings.ToUpper(definition), " WHERE ") {
+				if err := tx.Exec("DROP INDEX " + index).Error; err != nil {
+					return err
+				}
+			}
 		}
-	}
-	return s.db.AutoMigrate(&CBTAccount{}, &CBTSSOState{}, &MasterKelas{}, &MasterPeserta{}, &MasterKelompokBelajar{}, &MasterTahunAjaran{}, &MasterProgram{}, &MasterFase{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{})
+		// Older CBT releases enforced a unique index on NISN. The LMS intentionally
+		// shares a temporary placeholder NISN across multiple learners, so remove
+		// that index before AutoMigrate recreates the field as a normal lookup index.
+		if tx.Migrator().HasIndex(&MasterPeserta{}, "NISN") {
+			if err := tx.Migrator().DropIndex(&MasterPeserta{}, "NISN"); err != nil {
+				return fmt.Errorf("remove obsolete unique index on master student NISN: %w", err)
+			}
+		}
+		return tx.AutoMigrate(&CBTAccount{}, &CBTSSOState{}, &MasterKelas{}, &MasterPeserta{}, &MasterKelompokBelajar{}, &MasterTahunAjaran{}, &MasterProgram{}, &MasterFase{}, &MasterTutor{}, &MasterMapel{}, &QuestionFolder{}, &Question{}, &QuestionPackage{}, &PackageAssignment{}, &QuestionVersion{}, &QuestionMedia{}, &Assessment{}, &AssessmentItem{}, &AssessmentAssignment{}, &Attempt{}, &AttemptItem{}, &Answer{}, &AttemptAttachment{}, &AttemptRecovery{}, &AttemptAnswerRevision{}, &AuditLog{}, &SyncState{}, &SyncRun{}, &IntegrationNonce{}, &IntegrationOutbox{}, &MigrationBatch{}, &FormDocument{}, &FormCollaborator{}, &FormMediaGrant{}, &FormVersion{}, &FormAccessLink{}, &FormResponseRevision{}, &FormTutorPreference{}, &AssessmentClassTarget{})
+	})
 }
 func (s *Server) ensureAdmin() error {
 	var count int64
@@ -1058,38 +1126,117 @@ type questionSnapshot struct {
 
 func (s *Server) publicExamLogin(c *fiber.Ctx) error {
 	var input struct {
-		NISN       string `json:"nisn"`
-		AccessCode string `json:"accessCode"`
+		NISN         string `json:"nisn"`
+		AccessCode   string `json:"accessCode"`
+		AssessmentID string `json:"assessmentId"`
+		LinkToken    string `json:"linkToken"`
 	}
 	if c.BodyParser(&input) != nil || strings.TrimSpace(input.NISN) == "" || strings.TrimSpace(input.AccessCode) == "" {
 		return fiber.NewError(400, "NISN dan kode akses wajib diisi")
 	}
-	var student MasterPeserta
-	if err := s.db.Where("nisn = ? AND active = ?", strings.TrimSpace(input.NISN), true).First(&student).Error; err != nil {
-		return fiber.NewError(401, "Peserta tidak aktif atau tidak ditemukan")
-	}
-	var account CBTAccount
-	if err := s.db.Where("peserta_didik_id = ? AND active = ?", student.ID, true).First(&account).Error; err != nil {
-		account = CBTAccount{Username: "nisn-" + student.NISN, Nama: student.Nama, Role: "siswa", PesertaDidikID: student.ID, Active: true}
-		account.PasswordHash, _ = hashPassword(uuid.NewString())
-		_ = s.db.Create(&account).Error
-	}
-	var rows []Assessment
-	if err := s.db.Where("kind = ? AND class_id = ? AND status = ? AND trashed_at IS NULL AND access_code_hash = ?", "ujian_online", student.KelasID, "published", hash(strings.TrimSpace(input.AccessCode))).Find(&rows).Error; err != nil {
+	students := []MasterPeserta{}
+	if err := s.db.Where("nisn = ? AND active = ?", strings.TrimSpace(input.NISN), true).Find(&students).Error; err != nil {
 		return err
 	}
-	token, _ := s.issueToken(account, 8*time.Hour)
-	return c.JSON(fiber.Map{"accessToken": token, "student": fiber.Map{"id": student.ID, "nama": student.Nama, "nis": student.NIS, "nisn": student.NISN}, "assessments": rows})
+	rows, err := s.accessibleByCode(input.AccessCode, input.AssessmentID)
+	if err != nil {
+		return err
+	}
+	linkID := ""
+	if input.LinkToken != "" {
+		linked, id, err := s.resolveFormLink(input.LinkToken)
+		if err != nil {
+			return err
+		}
+		linkID = id
+		filtered := []Assessment{}
+		for _, row := range rows {
+			if row.ID == linked.ID {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	var student MasterPeserta
+	allowed := []Assessment{}
+	// Placeholder/duplicate NISNs must never silently select the first learner.
+	for _, candidate := range students {
+		matches := []Assessment{}
+		for _, row := range rows {
+			permitted, err := s.studentHasAssessmentAccess(candidate, row)
+			if err != nil {
+				return err
+			}
+			if permitted {
+				matches = append(matches, row)
+			}
+		}
+		if len(matches) > 0 {
+			if student.ID != "" {
+				return fiber.NewError(409, "NISN belum unik di LMS. Hubungi tutor untuk memperbaiki identitas peserta.")
+			}
+			student, allowed = candidate, matches
+		}
+	}
+	if len(allowed) == 0 {
+		return fiber.NewError(401, "NISN atau kode tidak sesuai, peserta belum ditugaskan, atau jadwal tidak berlaku")
+	}
+	var account CBTAccount
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", "cbt-code-account:"+student.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("peserta_didik_id = ?", student.ID).First(&account).Error; err == nil {
+			if !account.Active || account.Role != "siswa" {
+				return fiber.NewError(403, "Akun siswa tidak aktif")
+			}
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		password, err := hashPassword(uuid.NewString())
+		if err != nil {
+			return err
+		}
+		account = CBTAccount{SourceUserID: "cbt-code:" + student.ID, Username: "peserta-" + student.ID, Nama: student.Nama, Role: "siswa", PesertaDidikID: student.ID, Active: true, PasswordHash: password}
+		return tx.Create(&account).Error
+	})
+	if err != nil {
+		return err
+	}
+	ids := []string{}
+	output := []fiber.Map{}
+	for _, row := range allowed {
+		ids = append(ids, row.ID)
+		output = append(output, publicAssessment(row))
+	}
+	token, err := s.issueAssessmentToken(account, ids, linkID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"accessToken": token, "user": fiber.Map{"id": account.ID, "username": account.Username, "nama": student.Nama, "role": "siswa", "pesertaDidikId": student.ID}, "student": fiber.Map{"id": student.ID, "nama": student.Nama, "nis": student.NIS, "nisn": student.NISN}, "assessments": output})
 }
 func (s *Server) studentHasAssessmentAccess(student MasterPeserta, assessment Assessment) (bool, error) {
+	return studentHasAssessmentAccessTx(s.db, student, assessment)
+}
+func studentHasAssessmentAccessTx(tx *gorm.DB, student MasterPeserta, assessment Assessment) (bool, error) {
 	var assignmentCount, directAssignmentCount int64
-	if err := s.db.Model(&AssessmentAssignment{}).Where("assessment_id = ?", assessment.ID).Count(&assignmentCount).Error; err != nil {
+	if err := tx.Model(&AssessmentAssignment{}).Where("assessment_id = ?", assessment.ID).Count(&assignmentCount).Error; err != nil {
 		return false, err
 	}
 	if assignmentCount == 0 {
+		var count int64
+		if err := tx.Model(&AssessmentClassTarget{}).Where("assessment_id = ?", assessment.ID).Count(&count).Error; err != nil {
+			return false, err
+		}
+		if count > 0 {
+			var matched int64
+			err := tx.Model(&AssessmentClassTarget{}).Where("assessment_id = ? AND class_id = ?", assessment.ID, student.KelasID).Count(&matched).Error
+			return matched > 0, err
+		}
 		return assessment.ClassID == student.KelasID, nil
 	}
-	if err := s.db.Model(&AssessmentAssignment{}).Where("assessment_id = ? AND student_id = ?", assessment.ID, student.ID).Count(&directAssignmentCount).Error; err != nil {
+	if err := tx.Model(&AssessmentAssignment{}).Where("assessment_id = ? AND student_id = ?", assessment.ID, student.ID).Count(&directAssignmentCount).Error; err != nil {
 		return false, err
 	}
 	return directAssignmentCount > 0, nil
@@ -1112,6 +1259,9 @@ func (s *Server) studentAssessments(c *fiber.Ctx) error {
 	}
 	rows := make([]fiber.Map, 0, len(candidates))
 	for _, assessment := range candidates {
+		if scope, _ := c.Locals("assessmentScope").([]string); len(scope) > 0 && !containsString(scope, assessment.ID) {
+			continue
+		}
 		permitted, err := s.studentHasAssessmentAccess(student, assessment)
 		if err != nil {
 			return err
@@ -1186,7 +1336,7 @@ func (s *Server) verifyStudentAssessment(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{
 		"verified":   true,
-		"student":    fiber.Map{"id": student.ID, "name": student.Nama, "nis": student.NIS, "nisn": student.NISN, "className": className},
+		"student":    fiber.Map{"id": student.ID, "name": student.Nama, "nis": student.NIS, "nisn": student.NISN, "className": className, "gender": student.JenisKelamin, "learningGroup": s.studentLearningGroup(student.PokjarID)},
 		"assessment": fiber.Map{"id": assessment.ID, "title": assessment.Title, "kind": assessment.Kind, "subjectName": subjectName, "durationMinute": assessment.DurationMinute, "room": assessment.Room, "startsAt": assessment.StartsAt, "endsAt": assessment.EndsAt, "instructions": assessment.Instructions},
 		"serverTime": now.UTC(),
 	})
@@ -1213,7 +1363,7 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&assessment, "id = ? AND status = ? AND trashed_at IS NULL", c.Params("id"), "published").Error; err != nil {
 			return fiber.NewError(404, "Asesmen tidak tersedia")
 		}
-		permitted, err := s.studentHasAssessmentAccess(student, assessment)
+		permitted, err := studentHasAssessmentAccessTx(tx, student, assessment)
 		if err != nil {
 			return err
 		}
@@ -1230,6 +1380,9 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 			}
 			attempt = previous[0]
 			return nil
+		}
+		if assessment.ResponsesPaused {
+			return fiber.NewError(403, "Penerimaan peserta baru sedang dijeda oleh tutor")
 		}
 		now := time.Now()
 		if assessment.StartsAt != nil && now.Before(*assessment.StartsAt) || assessment.EndsAt != nil && now.After(*assessment.EndsAt) {
@@ -1253,7 +1406,7 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 		if len(previous) > 0 {
 			number = previous[0].Number + 1
 		}
-		attempt = Attempt{AssessmentID: assessment.ID, StudentID: student.ID, ClassIDAtAttempt: student.KelasID, Number: number, Status: "started", Seed: uuid.NewString(), StartedAt: &now, DeadlineAt: &deadline}
+		attempt = Attempt{AssessmentID: assessment.ID, FormVersionID: assessment.FormVersionID, StudentID: student.ID, ClassIDAtAttempt: student.KelasID, Number: number, Status: "started", Seed: uuid.NewString(), StartedAt: &now, DeadlineAt: &deadline}
 		if err := tx.Create(&attempt).Error; err != nil {
 			return err
 		}
@@ -1275,12 +1428,16 @@ func (s *Server) startAttempt(c *fiber.Ctx) error {
 				items[index].SnapshotJSON = shuffleSnapshotOptions(items[index].SnapshotJSON, random)
 			}
 		}
+		attemptItems := []AttemptItem{}
 		for index, item := range items {
-			if err := tx.Create(&AttemptItem{AttemptID: attempt.ID, AssessmentItemID: item.ID, QuestionID: item.QuestionID, Position: index + 1, Weight: item.Weight, SnapshotJSON: item.SnapshotJSON}).Error; err != nil {
+			row := AttemptItem{AttemptID: attempt.ID, AssessmentItemID: item.ID, QuestionID: item.QuestionID, Position: index + 1, Weight: item.Weight, SnapshotJSON: item.SnapshotJSON}
+			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
+			attemptItems = append(attemptItems, row)
 		}
-		return nil
+		linkID, _ := c.Locals("accessLinkID").(string)
+		return s.materializePrefill(tx, linkID, assessment, attempt, attemptItems)
 	})
 	if err != nil {
 		return err
@@ -1331,7 +1488,15 @@ func (s *Server) studentAttempt(c *fiber.Ctx) error {
 		answer := byItem[item.ID]
 		output = append(output, fiber.Map{"id": item.ID, "position": item.Position, "question": safeSnapshot(item.SnapshotJSON), "flagged": item.Flagged, "answer": answer.ValueJSON, "revision": answer.Revision})
 	}
-	return c.JSON(fiber.Map{"attempt": studentAttemptSummary(attempt), "items": output, "serverTime": time.Now().UTC()})
+	activeIDs, err := s.activeIDsForAttempt(attempt.ID)
+	if err != nil {
+		return err
+	}
+	display, err := attemptFormDisplay(s.db, attempt)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"attempt": studentAttemptSummary(attempt), "items": output, "activeItemIds": activeIDs, "serverTime": time.Now().UTC(), "display": display})
 }
 
 func resultVisible(assessment Assessment, attempt Attempt) bool {
@@ -1339,6 +1504,10 @@ func resultVisible(assessment Assessment, attempt Attempt) bool {
 		return false
 	}
 	if assessment.ResultsPolicy == "after_review" {
+		// Legacy policies remain unchanged; new Forms explicitly require release.
+		if assessment.FormVersionID != "" && (assessment.ResultsReleasedAt == nil || attempt.SubmittedAt != nil && assessment.ResultsReleasedAt.Before(*attempt.SubmittedAt)) {
+			return false
+		}
 		return attempt.Status == "completed"
 	}
 	return attempt.Status == "completed" || attempt.Status == "submitted"
@@ -1347,7 +1516,11 @@ func resultVisible(assessment Assessment, attempt Attempt) bool {
 func (s *Server) studentAttempts(c *fiber.Ctx) error {
 	account := currentAccount(c)
 	var attempts []Attempt
-	if err := s.db.Where("student_id = ?", account.PesertaDidikID).Order("started_at desc").Limit(100).Find(&attempts).Error; err != nil {
+	query := s.db.Where("student_id = ?", account.PesertaDidikID)
+	if scope, _ := c.Locals("assessmentScope").([]string); len(scope) > 0 {
+		query = query.Where("assessment_id IN ?", scope)
+	}
+	if err := query.Order("started_at desc").Limit(100).Find(&attempts).Error; err != nil {
 		return err
 	}
 	output := make([]fiber.Map, 0, len(attempts))
@@ -1376,7 +1549,7 @@ func (s *Server) studentAttemptResult(c *fiber.Ctx) error {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
 	visible := resultVisible(assessment, attempt)
-	result := fiber.Map{"available": visible, "status": attempt.Status, "pendingManual": attempt.NeedsManual, "title": assessment.Title, "showReview": visible && assessment.ShowReview}
+	result := fiber.Map{"attemptId": attempt.ID, "canEdit": canReopenFormResponse(s.db, attempt), "available": visible, "status": attempt.Status, "pendingManual": attempt.NeedsManual, "title": assessment.Title, "showReview": visible && assessment.ShowReview}
 	if !visible {
 		return c.JSON(result)
 	}
@@ -1390,6 +1563,11 @@ func (s *Server) studentAttemptResult(c *fiber.Ctx) error {
 		var answers []Answer
 		_ = s.db.Where("attempt_id = ?", attempt.ID).Order("position").Find(&items).Error
 		_ = s.db.Where("attempt_id = ?", attempt.ID).Find(&answers).Error
+		active, err := activeAttemptItems(s.db, attempt, items, answers)
+		if err != nil {
+			return err
+		}
+		items = active
 		byID := map[string]Answer{}
 		for _, answer := range answers {
 			byID[answer.AttemptItemID] = answer
@@ -1398,6 +1576,8 @@ func (s *Server) studentAttemptResult(c *fiber.Ctx) error {
 		for _, item := range items {
 			answer := byID[item.ID]
 			entry := safeSnapshot(item.SnapshotJSON)
+			entry["question"] = safeSnapshot(item.SnapshotJSON)
+			entry["position"], entry["weight"] = item.Position, item.Weight
 			entry["answer"] = answer.ValueJSON
 			entry["correct"] = answer.Correct
 			if answer.ManualScore != nil {
@@ -1435,10 +1615,34 @@ func (s *Server) saveAnswer(c *fiber.Ctx) error {
 	}
 	var answer Answer
 	manual := false
+	requestKey := strings.TrimSpace(c.Get("Idempotency-Key"))
+	if requestKey != "" {
+		if _, err := uuid.Parse(requestKey); err != nil {
+			return fiber.NewError(400, "ID penyimpanan tidak valid")
+		}
+	}
+	requestHash := hash(currentAccount(c).ID + ":" + c.Params("itemId") + ":" + marshalJSON(input))
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var attempt Attempt
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&attempt, "id = ?", c.Params("id")).Error; err != nil {
 			return fiber.NewError(404, "Percobaan tidak ditemukan")
+		}
+		if attempt.StudentID != account.PesertaDidikID {
+			return fiber.NewError(403, "Akses ditolak")
+		}
+		if requestKey != "" {
+			var receipt AttemptAnswerRevision
+			err := tx.First(&receipt, "attempt_id = ? AND request_key = ?", attempt.ID, requestKey).Error
+			if err == nil {
+				if receipt.RequestHash != requestHash {
+					return fiber.NewError(409, "ID penyimpanan telah digunakan untuk perubahan lain")
+				}
+				answer = Answer{AttemptID: attempt.ID, AttemptItemID: receipt.AttemptItemID, Revision: receipt.Revision}
+				return nil
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
 		}
 		if err := s.canWriteAttempt(account, attempt); err != nil {
 			return err
@@ -1449,6 +1653,16 @@ func (s *Server) saveAnswer(c *fiber.Ctx) error {
 		}
 		var snapshot questionSnapshot
 		_ = json.Unmarshal([]byte(item.SnapshotJSON), &snapshot)
+		// New typed Forms enforce response shape; historical snapshots retain
+		// their original permissive contract for compatibility.
+		if attempt.FormVersionID != "" {
+			if err := validateResponse(snapshot, decodeJSON(string(input.Value)), false); err != nil {
+				return err
+			}
+			if err := validateResponseAttachments(tx, item, snapshot, decodeJSON(string(input.Value))); err != nil {
+				return err
+			}
+		}
 		correct, score, needsManual := grade(snapshot, string(input.Value), item.Weight)
 		manual = needsManual
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("attempt_id = ? AND attempt_item_id = ?", attempt.ID, item.ID).First(&answer).Error
@@ -1465,8 +1679,13 @@ func (s *Server) saveAnswer(c *fiber.Ctx) error {
 				return fiber.NewError(409, "Versi jawaban sudah berubah; muat kembali jawaban tersimpan")
 			}
 			answer.ValueJSON, answer.Correct, answer.AutoScore, answer.Revision = string(input.Value), correct, score, answer.Revision+1
+			// Marking of an earlier submitted response must not apply to new text.
+			if attempt.FormVersionID != "" {
+				answer.ManualScore = nil
+				answer.Comment = ""
+			}
 		}
-		if err := tx.Create(&AttemptAnswerRevision{AttemptID: attempt.ID, AttemptItemID: item.ID, ActorID: account.ID, Source: "student_autosave", Revision: answer.Revision, ValueJSON: answer.ValueJSON}).Error; err != nil {
+		if err := tx.Create(&AttemptAnswerRevision{AttemptID: attempt.ID, AttemptItemID: item.ID, ActorID: account.ID, Source: "student_autosave", Revision: answer.Revision, ValueJSON: answer.ValueJSON, RequestKey: requestKey, RequestHash: requestHash}).Error; err != nil {
 			return err
 		}
 		return tx.Save(&answer).Error
@@ -1474,7 +1693,11 @@ func (s *Server) saveAnswer(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.JSON(fiber.Map{"id": answer.ID, "revision": answer.Revision, "manual": manual, "saved": true})
+	activeIDs, err := s.activeIDsForAttempt(answer.AttemptID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"id": answer.ID, "revision": answer.Revision, "manual": manual, "saved": true, "activeItemIds": activeIDs})
 }
 func (s *Server) flagAttemptItem(c *fiber.Ctx) error {
 	account := currentAccount(c)
@@ -1676,11 +1899,11 @@ func (s *Server) downloadStaffAnswerFile(c *fiber.Ctx) error {
 		return fiber.NewError(404, "Jawaban tidak ditemukan")
 	}
 	var assessment Assessment
-	if err := s.db.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil || !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
+	if err := s.db.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil || !s.canReadAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Akses ditolak")
 	}
 	var attachment AttemptAttachment
-	if err := s.db.First(&attachment, "id = ? AND attempt_id = ? AND deleted_at IS NULL", c.Params("fileId"), attempt.ID).Error; err != nil {
+	if err := s.db.First(&attachment, "id = ? AND attempt_id = ? AND attempt_item_id = ? AND deleted_at IS NULL", c.Params("fileId"), attempt.ID, answer.AttemptItemID).Error; err != nil {
 		return fiber.NewError(404, "Berkas tidak ditemukan")
 	}
 	return s.sendAttemptFile(c, attachment)
@@ -1696,6 +1919,11 @@ func finalizeAttemptTx(tx *gorm.DB, attempt *Attempt, submittedAt time.Time) err
 		return err
 	}
 	byItem := make(map[string]Answer, len(answers))
+	activeItems, err := activeAttemptItems(tx, *attempt, items, answers)
+	if err != nil {
+		return err
+	}
+	items = activeItems
 	for _, answer := range answers {
 		byItem[answer.AttemptItemID] = answer
 	}
@@ -1713,6 +1941,22 @@ func finalizeAttemptTx(tx *gorm.DB, attempt *Attempt, submittedAt time.Time) err
 			byItem[item.ID] = answer
 			if manual {
 				needsManual = true
+			}
+		}
+		// Prefilled responses are not graded when an attempt starts. At submit,
+		// calculate them from the immutable snapshot, just like an autosaved
+		// response, without mistaking a missing objective grade for manual work.
+		if found && answer.Correct == nil && answer.ManualScore == nil {
+			var snapshot questionSnapshot
+			if err := json.Unmarshal([]byte(item.SnapshotJSON), &snapshot); err != nil {
+				return err
+			}
+			correct, autoScore, manual := grade(snapshot, answer.ValueJSON, item.Weight)
+			if !manual {
+				answer.Correct, answer.AutoScore = correct, autoScore
+				if err := tx.Model(&Answer{}).Where("id = ?", answer.ID).Updates(map[string]any{"correct": correct, "auto_score": autoScore}).Error; err != nil {
+					return err
+				}
 			}
 		}
 		if answer.ManualScore != nil {
@@ -1751,6 +1995,25 @@ func (s *Server) submitAttempt(c *fiber.Ctx) error {
 		if attempt.Status != "started" {
 			return nil
 		}
+		if attempt.FormVersionID != "" && (attempt.DeadlineAt == nil || time.Now().Before(*attempt.DeadlineAt)) {
+			var items []AttemptItem
+			var answers []Answer
+			if err := tx.Where("attempt_id = ?", attempt.ID).Find(&items).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("attempt_id = ?", attempt.ID).Find(&answers).Error; err != nil {
+				return err
+			}
+			active, err := activeAttemptItems(tx, attempt, items, answers)
+			if err != nil {
+				return err
+			}
+			if attempt.FormVersionID != "" {
+				if err := validateRequiredAnswers(tx, active, answers); err != nil {
+					return err
+				}
+			}
+		}
 		newlySubmitted = true
 		return finalizeAttemptTx(tx, &attempt, time.Now())
 	})
@@ -1774,7 +2037,7 @@ func (s *Server) assessmentResults(c *fiber.Ctx) error {
 	if err := s.db.First(&assessment, "id = ?", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
+	if !s.canReadAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Akses ditolak")
 	}
 	filters, err := parseResultFilters(c)
@@ -1816,7 +2079,7 @@ func (s *Server) staffAttemptDetail(c *fiber.Ctx) error {
 	if err := s.db.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
+	if !s.canReadAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Akses ditolak")
 	}
 	var student MasterPeserta
@@ -1870,7 +2133,7 @@ func (s *Server) gradeAnswer(c *fiber.Ctx) error {
 	if err := s.db.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, assessment.OwnerID) {
+	if !s.canGradeAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Akses ditolak")
 	}
 	var input struct {
@@ -1890,8 +2153,11 @@ func (s *Server) gradeAnswer(c *fiber.Ctx) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&attempt, "id = ?", answer.AttemptID).Error; err != nil {
 			return fiber.NewError(404, "Percobaan tidak ditemukan")
 		}
-		if err := tx.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil || !staffCanWrite(account, assessment.OwnerID) {
+		if err := tx.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil || !s.canGradeAssessment(tx, account, assessment) {
 			return fiber.NewError(403, "Akses ditolak")
+		}
+		if attempt.FormVersionID != "" && attempt.Status == "started" {
+			return fiber.NewError(409, "Siswa masih menyunting respons. Tunggu hingga dikirim kembali.")
 		}
 		var item AttemptItem
 		if err := tx.First(&item, "id = ? AND attempt_id = ?", answer.AttemptItemID, attempt.ID).Error; err != nil {
@@ -1911,8 +2177,26 @@ func (s *Server) gradeAnswer(c *fiber.Ctx) error {
 		if err := tx.Where("attempt_id = ?", attempt.ID).Find(&answers).Error; err != nil {
 			return err
 		}
+		var items []AttemptItem
+		if err := tx.Where("attempt_id = ?", attempt.ID).Find(&items).Error; err != nil {
+			return err
+		}
+		items, err := activeAttemptItems(tx, attempt, items, answers)
+		if err != nil {
+			return err
+		}
+		active := map[string]bool{}
+		for _, item := range items {
+			active[item.ID] = true
+		}
+		if !active[answer.AttemptItemID] {
+			return fiber.NewError(400, "Soal ini tidak termasuk jalur respons aktif")
+		}
 		attempt.Score, attempt.NeedsManual = 0, false
 		for _, row := range answers {
+			if !active[row.AttemptItemID] {
+				continue
+			}
 			if row.ManualScore != nil {
 				attempt.Score += *row.ManualScore
 			} else {

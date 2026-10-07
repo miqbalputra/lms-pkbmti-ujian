@@ -22,7 +22,7 @@ func (b *Base) BeforeCreate(*gorm.DB) error {
 
 type CBTAccount struct {
 	Base
-	SourceUserID    string `gorm:"uniqueIndex" json:"sourceUserId"`
+	SourceUserID    string `gorm:"uniqueIndex:idx_cbt_accounts_source_user_id,where:source_user_id <> ''" json:"sourceUserId"`
 	Username        string `gorm:"uniqueIndex;not null" json:"username"`
 	PasswordHash    string `json:"-"`
 	Nama            string `json:"nama"`
@@ -104,7 +104,7 @@ type MasterMapel struct {
 type Question struct {
 	Base
 	OwnerID             string           `gorm:"index" json:"ownerId"`
-	PackageID           string           `gorm:"index:idx_question_package_order,priority:1" json:"packageId,omitempty"`
+	PackageID           string           `gorm:"default:null;index:idx_question_package_order,priority:1" json:"packageId,omitempty"`
 	PackagePosition     int              `gorm:"index:idx_question_package_order,priority:2" json:"packagePosition,omitempty"`
 	Package             *QuestionPackage `gorm:"foreignKey:PackageID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
 	FolderID            string           `gorm:"index" json:"folderId,omitempty"`
@@ -197,6 +197,10 @@ type QuestionMedia struct {
 
 type Assessment struct {
 	Base
+	ResponsesPaused      bool       `gorm:"default:false" json:"responsesPaused"`
+	ResultsReleasedAt    *time.Time `json:"resultsReleasedAt,omitempty"`
+	ResultsReleasedBy    string     `json:"resultsReleasedBy,omitempty"`
+	FormVersionID        string     `gorm:"index" json:"formVersionId,omitempty"`
 	OwnerID              string     `gorm:"index" json:"ownerId"`
 	Kind                 string     `gorm:"index" json:"kind"`
 	Title                string     `json:"title"`
@@ -243,6 +247,7 @@ type AssessmentAssignment struct {
 }
 type Attempt struct {
 	Base
+	FormVersionID    string     `gorm:"index" json:"formVersionId,omitempty"`
 	AssessmentID     string     `gorm:"uniqueIndex:assessment_student_number,priority:1;index" json:"assessmentId"`
 	StudentID        string     `gorm:"uniqueIndex:assessment_student_number,priority:2;index" json:"studentId"`
 	ClassIDAtAttempt string     `gorm:"index" json:"classIdAtAttempt"`
@@ -254,7 +259,7 @@ type Attempt struct {
 	DeadlineAt       *time.Time `json:"deadlineAt,omitempty"`
 	Score            float64    `json:"score"`
 	NeedsManual      bool       `json:"needsManual"`
-	SourceAttemptID  string     `gorm:"uniqueIndex" json:"sourceAttemptId,omitempty"`
+	SourceAttemptID  string     `gorm:"uniqueIndex:idx_attempts_source_attempt_id,where:source_attempt_id <> ''" json:"sourceAttemptId,omitempty"`
 }
 type AttemptItem struct {
 	Base
@@ -305,12 +310,14 @@ type AttemptRecovery struct {
 
 type AttemptAnswerRevision struct {
 	Base
-	AttemptID     string `gorm:"index" json:"attemptId"`
+	AttemptID     string `gorm:"index;uniqueIndex:answer_command,priority:1,where:request_key <> ''" json:"attemptId"`
 	AttemptItemID string `gorm:"index" json:"attemptItemId"`
 	ActorID       string `json:"actorId"`
 	Source        string `json:"source"`
 	Revision      int    `json:"revision"`
 	ValueJSON     string `gorm:"type:text" json:"valueJson"`
+	RequestKey    string `gorm:"uniqueIndex:answer_command,priority:2,where:request_key <> ''" json:"requestKey,omitempty"`
+	RequestHash   string `json:"-"`
 }
 
 type AuditLog struct {

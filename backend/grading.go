@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/url"
+	"pkbm-lms-ujian/shared"
 	"reflect"
 	"sort"
 	"strings"
@@ -14,12 +15,16 @@ import (
 	"github.com/google/uuid"
 )
 
-var supportedQuestionTypes = map[string]bool{
-	"pg_tunggal": true, "pg_kompleks": true, "dropdown": true, "isian_singkat": true,
-	"uraian": true, "benar_salah": true, "menjodohkan": true, "susun_urutan": true,
-	"kisi_pg": true, "kisi_checkbox": true, "skala_linear": true, "rating": true,
-	"tanggal": true, "waktu": true, "unggah_berkas": true,
-}
+var supportedQuestionTypes = func() map[string]bool {
+	out := map[string]bool{}
+	for _, definition := range shared.QuestionTypes() {
+		if out[definition.ID] {
+			panic("duplicate question type")
+		}
+		out[definition.ID] = true
+	}
+	return out
+}()
 
 func decodeJSON(raw string) any {
 	decoder := json.NewDecoder(bytes.NewBufferString(raw))

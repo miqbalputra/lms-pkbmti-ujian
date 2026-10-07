@@ -2,7 +2,12 @@
 .env.local
 backend/cbt.db
 backend/uploads/
+uploads/
 frontend/node_modules/
+collaboration/node_modules/
+backend/cbt-e2e*
+backend/public/
+collaboration/*.log
 frontend/dist/
 frontend/*.tsbuildinfo
 test-results/

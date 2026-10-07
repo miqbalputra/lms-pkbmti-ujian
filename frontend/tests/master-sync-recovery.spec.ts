@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('tutor dapat memulihkan daftar kelas dan siswa lewat sinkronisasi penuh dari builder', async ({ page }) => {
   let synced = false
@@ -7,6 +7,7 @@ test('tutor dapat memulihkan daftar kelas dan siswa lewat sinkronisasi penuh dar
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
 

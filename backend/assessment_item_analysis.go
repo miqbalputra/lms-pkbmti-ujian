@@ -212,7 +212,7 @@ func (s *Server) assessmentItemAnalysis(c *fiber.Ctx) error {
 	if err := s.db.First(&assessment, "id = ?", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, assessment.OwnerID) {
+	if !s.canReadAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Analisis butir hanya tersedia bagi admin dan tutor pemilik asesmen")
 	}
 	var assessmentItems []AssessmentItem
@@ -256,6 +256,43 @@ func (s *Server) assessmentItemAnalysis(c *fiber.Ctx) error {
 	for _, answer := range answers {
 		answerByAttemptItem[answer.AttemptItemID] = answer
 	}
+	activeByAttempt := map[string]map[string]bool{}
+	itemsByAttempt := map[string][]AttemptItem{}
+	answersByAttempt := map[string][]Answer{}
+	for _, item := range attemptItems {
+		itemsByAttempt[item.AttemptID] = append(itemsByAttempt[item.AttemptID], item)
+	}
+	for _, answer := range answers {
+		answersByAttempt[answer.AttemptID] = append(answersByAttempt[answer.AttemptID], answer)
+	}
+	for _, attempt := range attempts {
+		if attempt.FormVersionID == "" {
+			continue
+		}
+		active, err := activeAttemptItems(s.db, attempt, itemsByAttempt[attempt.ID], answersByAttempt[attempt.ID])
+		if err != nil {
+			return err
+		}
+		activeByAttempt[attempt.ID] = map[string]bool{}
+		for _, item := range active {
+			activeByAttempt[attempt.ID][item.AssessmentItemID] = true
+		}
+	}
+	// Normalize ranking by the weight of the route each pupil actually took.
+	for i := range ranked {
+		if active, ok := activeByAttempt[ranked[i].AttemptID]; ok {
+			weight := 0.0
+			for _, item := range assessmentItems {
+				if active[item.ID] && item.Weight > 0 {
+					weight += item.Weight
+				}
+			}
+			if weight > 0 {
+				ranked[i].Score = ranked[i].Score * totalWeight / weight
+			}
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].Score > ranked[j].Score })
 	output := make([]assessmentItemAnalysisRow, 0, len(assessmentItems))
 	for _, item := range assessmentItems {
 		var snapshot questionSnapshot
@@ -264,6 +301,9 @@ func (s *Server) assessmentItemAnalysis(c *fiber.Ctx) error {
 		}
 		observations := make([]itemAnalysisObservation, 0, len(attempts))
 		for _, attempt := range attempts {
+			if active, ok := activeByAttempt[attempt.ID]; ok && !active[item.ID] {
+				continue
+			}
 			attemptItem, exists := itemByAttemptAndAssessmentItem[attempt.ID+":"+item.ID]
 			answer, hasAnswer := answerByAttemptItem[attemptItem.ID]
 			if !exists || !hasAnswer {

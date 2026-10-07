@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 
 async function loginAsTutor(page: Page) {
   await page.goto('/')
@@ -13,6 +13,7 @@ test('tutor dapat memberi label sementara pada kelas yang roster siswanya sudah 
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
 
@@ -50,6 +51,7 @@ test('tanpa roster siswa tersinkron, tutor diarahkan ke sinkronisasi dan kelas p
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })

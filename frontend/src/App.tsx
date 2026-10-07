@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
 import { Activity, Archive, ArrowDown, ArrowUp, BarChart3, BookOpen, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Cloud, Copy, Download, GraduationCap, GripVertical, LayoutDashboard, LogOut, Pencil, Play, Plus, Send, Settings2, ShieldCheck, Trash2, UsersRound, type LucideIcon } from 'lucide-react'
-import { api, loadSession, saveSession, type Session } from './api'
+import { api, ApiError, loadSession, saveSession, type Session } from './api'
 import type { QuestionFolder } from './QuestionEditor'
 import { questionTypes } from './questionTypes'
 import { QuestionAnswerControl, StimulusContent, type AnswerFile, type StudentQuestion } from './QuestionAnswerControl'
@@ -10,6 +10,10 @@ const QuestionEditor = lazy(() => import('./QuestionEditor').then((module) => ({
 const StudentPortal = lazy(() => import('./StudentPortal').then((module) => ({ default: module.StudentPortal })))
 const QuestionPackages = lazy(() => import('./QuestionPackages').then((module) => ({ default: module.QuestionPackages })))
 const StudentRoster = lazy(() => import('./StudentRoster').then((module) => ({ default: module.StudentRoster })))
+const FormCanvas = lazy(() => import('./forms/FormCanvas').then(m=>({default:m.FormCanvas})))
+const FormPreview = lazy(() => import('./forms/FormPreview').then(m=>({default:m.FormPreview})))
+const FormsHome = lazy(() => import('./forms/FormsHome').then(m=>({default:m.FormsHome})))
+const StudentEntry = lazy(() => import('./forms/StudentEntry').then(m=>({default:m.StudentEntry})))
 
 function ScreenLoading({ label }: { label: string }) {
   return <div role="status" className="grid min-h-48 place-items-center rounded-2xl border bg-white p-6 text-center text-slate-600"><span>{label}</span></div>
@@ -74,16 +78,32 @@ export function App() {
   const navigate = useNavigate()
   const [session, setSession] = useState<Session | null>(loadSession())
   const [notice, setNotice] = useState<Notice>(null)
+  const [formsEnabled,setFormsEnabled]=useState<boolean|null>(null)
+  const [configurationError,setConfigurationError]=useState(''),[configurationRetry,setConfigurationRetry]=useState(0)
+  useEffect(()=>{
+    let active=true;const controller=new AbortController();
+    setConfigurationError('');
+    const timer=window.setTimeout(()=>controller.abort(),10000);
+    void api<{formsEnabled?:boolean}>('/public/config',{signal:controller.signal},null)
+      .then(c=>{if(active)setFormsEnabled(Boolean(c.formsEnabled))})
+      .catch(error=>{if(active){if(error instanceof ApiError&&error.status===404)setFormsEnabled(false);else setConfigurationError('Konfigurasi belum dapat dimuat. Periksa koneksi lalu coba lagi.')}})
+      .finally(()=>clearTimeout(timer));
+    return()=>{active=false;clearTimeout(timer);controller.abort()}
+  },[configurationRetry])
   const tab = routeTab(location.pathname, new URLSearchParams(location.search))
   const questionLibrary = new URLSearchParams(location.search).get('tab') === 'questions'
   const setTab = (next: string) => navigate(routePath(next))
   const logout = () => { saveSession(null); setSession(null); navigate('/', { replace: true }) }
   if (location.pathname === '/sso/callback') return <SSOCallback onComplete={(next, nextPath) => { saveSession(next); setSession(next); navigate(nextPath, { replace: true }) }} />
-  if (!session) return <Login onLogin={(next) => { saveSession(next); setSession(next) }} />
-  if (session.user.role === 'siswa') return <Suspense fallback={<main className="min-h-screen bg-slate-50 p-4"><ScreenLoading label="Menyiapkan ruang asesmen…"/></main>}><StudentPortal session={session} onLogout={logout} /></Suspense>
+  if (formsEnabled === null) return configurationError?<main className="mx-auto grid min-h-screen max-w-xl content-center gap-4 p-6"><p role="alert">{configurationError}</p><Button onClick={()=>setConfigurationRetry(n=>n+1)}>Coba lagi</Button></main>:<ScreenLoading label="Menyiapkan aplikasi CBT…"/>
+  if (!session) return formsEnabled&&!new URLSearchParams(location.search).has('masuk')?<Suspense fallback={<ScreenLoading label="Menyiapkan akses…"/>}><StudentEntry onLogin={next=>{saveSession(next);setSession(next)}}/></Suspense>:<Login onLogin={(next) => { saveSession(next); setSession(next) }} />
+  if (session.user.role === 'siswa') return <Suspense fallback={<main className="min-h-screen bg-slate-50 p-4"><ScreenLoading label="Menyiapkan ruang asesmen…"/></main>}><StudentPortal session={session} onLogout={logout} formsEnabled={formsEnabled}/></Suspense>
+  const editorRoute=location.pathname.match(/^\/editor\/(assessment|package)\/([^/]+)(?:\/preview)?$/)
+  if(formsEnabled&&editorRoute){const Canvas=location.pathname.endsWith('/preview')?FormPreview:FormCanvas;return <Suspense fallback={<ScreenLoading label="Menyiapkan editor…"/>}><Canvas key={`${editorRoute[1]}:${editorRoute[2]}`} kind={editorRoute[1] as 'assessment'|'package'} id={decodeURIComponent(editorRoute[2])} session={session}/></Suspense>}
   const nav: Array<[string, LucideIcon, string]> = [['dashboard', LayoutDashboard, 'Ringkasan'], ['students', UsersRound, 'Data Siswa'], ['questions', BookOpen, 'Bank Soal'], ['assessments', ClipboardList, 'Ujian & Simulasi'], ['schedule', CalendarDays, 'Jadwal'], ['monitor', Activity, 'Monitor live'], ['results', BarChart3, 'Hasil'], ['sync', Cloud, 'Sinkronisasi']]
+  if(formsEnabled){nav.find(n=>n[0]==='assessments')![2]='Ujian Online';nav.splice(4,0,['simulations',BookOpen,'Simulasi'])}
   const navGroups = [
-    { title: 'MULAI', ids: ['dashboard', 'students', 'assessments', 'questions'] },
+    { title: 'MULAI', ids: ['dashboard', 'students', 'assessments', 'simulations', 'questions'] },
     { title: 'PANTAU & NILAI', ids: ['schedule', 'monitor', 'results'] },
     { title: 'KONEKSI', ids: ['sync'] },
   ]
@@ -96,7 +116,13 @@ export function App() {
           {nav.filter(([id]) => group.ids.includes(id)).map(([id, Icon, label]) => <button key={id} type="button" aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)} className={`flex min-h-11 shrink-0 items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold ${tab === id ? 'bg-brand text-white' : 'text-slate-600 hover:bg-white'}`}><Icon className="size-4"/>{label}</button>)}
         </div>)}
       </nav>
-      <main className="min-w-0 space-y-4"><NoticeBox notice={notice}/><Suspense fallback={<ScreenLoading label="Menyiapkan ruang kerja…"/>}>{tab === 'dashboard' && <Dashboard session={session} onNavigate={setTab}/>} {tab === 'students' && <StudentRoster session={session} notify={setNotice}/>} {tab === 'questions' && (questionLibrary ? <QuestionLibrary session={session} notify={setNotice}/> : <QuestionPackages session={session} notify={setNotice}/>)} {tab === 'assessments' && <AssessmentBuilder session={session} notify={setNotice} onSync={() => setTab('sync')}/>} {tab === 'schedule' && <SchedulePanel session={session}/>} {tab === 'monitor' && <LiveMonitor session={session}/>} {tab === 'results' && <Results session={session}/>} {tab === 'sync' && <SyncPanel session={session} notify={setNotice}/>}</Suspense></main>
+      <main className="min-w-0 space-y-4"><NoticeBox notice={notice}/><Suspense fallback={<ScreenLoading label="Menyiapkan ruang kerja…"/>}>
+        {tab==='dashboard'&&<Dashboard session={session} onNavigate={setTab}/>}
+        {tab==='students'&&<StudentRoster session={session} notify={setNotice}/>}
+        {tab==='questions'&&(formsEnabled&&!new URLSearchParams(location.search).has('legacy')&&!questionLibrary&&!location.pathname.startsWith('/soal/paket/')?<FormsHome kind="package" session={session}/>:questionLibrary?<QuestionLibrary session={session} notify={setNotice}/>:<QuestionPackages session={session} notify={setNotice}/>)}
+        {(tab==='assessments'||tab==='simulations')&&(formsEnabled&&!new URLSearchParams(location.search).has('legacy')?<FormsHome kind="assessment" assessmentKind={tab==='simulations'?'simulasi':'ujian_online'} session={session}/>:<AssessmentBuilder session={session} notify={setNotice} onSync={()=>setTab('sync')}/>)}
+        {tab==='schedule'&&<SchedulePanel session={session}/>} {tab==='monitor'&&<LiveMonitor session={session}/>} {tab==='results'&&<Results session={session}/>} {tab==='sync'&&<SyncPanel session={session} notify={setNotice}/>}
+      </Suspense></main>
     </div>
   </div>
 }
@@ -125,7 +151,8 @@ function SSOCallback({ onComplete }: { onComplete: (session: Session, nextPath: 
 
 function routeTab(pathname: string, _search: URLSearchParams) {
   if (pathname === '/soal' || pathname === '/bank-soal' || pathname.startsWith('/soal/paket/')) return 'questions'
-  if (pathname === '/ujian' || pathname === '/simulasi') return 'assessments'
+  if (pathname === '/simulasi') return 'simulations'
+  if (pathname === '/ujian') return 'assessments'
   if (pathname === '/jadwal') return 'schedule'
   if (pathname === '/monitor') return 'monitor'
   if (pathname === '/hasil') return 'results'
@@ -138,6 +165,7 @@ function routePath(tab: string) {
   if (tab === 'questions') return '/soal'
   if (tab === 'questions-library') return '/soal?tab=questions'
   if (tab === 'assessments') return '/ujian'
+  if (tab === 'simulations') return '/simulasi'
   if (tab === 'schedule') return '/jadwal'
   if (tab === 'monitor') return '/monitor'
   if (tab === 'results') return '/hasil'

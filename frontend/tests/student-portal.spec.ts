@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 async function startAtOnlineLogin(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Beralih ke Ujian Online' }).click()
@@ -11,6 +11,7 @@ test('siswa membaca instruksi, autosave, menandai, memeriksa, mengirim, dan meli
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
 
@@ -89,6 +90,7 @@ test('token asesmen diverifikasi sebelum konfirmasi tes dan aksesnya muncul seba
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/public/ujian-online/cek' && method === 'POST') return json({ accessToken: 'token-session', student: { id: 'student-token', nama: 'Siswa Token' } })
@@ -133,6 +135,7 @@ test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyi
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
 
@@ -202,9 +205,72 @@ test('jawaban lokal yang bentrok dengan perangkat lain meminta pilihan dan menyi
   await expect(page.getByText('Semua jawaban sudah tersimpan di server.')).toBeVisible()
 })
 
+for (const mode of ['delayed', 'failed'] as const) test(`resume menunggu antrean lokal ${mode} tanpa menimpa jawaban baru`, async ({ page }) => {
+  let savedValue = 'b'
+  let revision = 0
+  await page.addInitScript((failure) => {
+    localStorage.setItem('pkbm-cbt-session', JSON.stringify({ accessToken: 'resume-session', user: { id: 'student-resume', username: '0000000010', nama: 'Siswa Resume', role: 'siswa' } }))
+    const getAll = IDBObjectStore.prototype.getAll
+    let intercepted = false
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const hooks = window as typeof window & { resumeReadWaiting?: boolean; releaseResume?: () => void }
+    hooks.releaseResume = release
+    IDBObjectStore.prototype.getAll = function (...args: Parameters<typeof getAll>) {
+      if (this.name !== 'answers' || intercepted) return getAll.apply(this, args)
+      intercepted = true
+      hooks.resumeReadWaiting = true
+      if (failure) throw new Error('Antrean lokal sementara gagal dibaca.')
+      const request = getAll.apply(this, args)
+      // Stall the local read independently of HTTP. In the old implementation
+      // this exposed answer controls and subsequently overwrote a new choice.
+      return {
+        get result() { return request.result },
+        set onsuccess(callback: IDBRequest['onsuccess']) {
+          request.onsuccess = (event) => { void gate.then(() => callback?.call(request, event)) }
+        },
+        set onerror(callback: IDBRequest['onerror']) { request.onerror = callback },
+      } as IDBRequest
+    }
+  }, mode === 'failed')
+  await page.route('**/api/**', (route) => {
+    const path = new URL(route.request().url()).pathname.replace('/api', '')
+    const json = (data: unknown) => route.fulfill({ json: data })
+    if (path === '/public/config') return json({ formsEnabled: false })
+    if (path === '/student/assessments') return json([{ id: 'resume-assessment', title: 'Latihan Resume', kind: 'ujian_online', durationMinute: 60 }])
+    if (path === '/student/attempts') return json([{ id: 'resume-attempt', assessmentId: 'resume-assessment', title: 'Latihan Resume', kind: 'ujian_online', status: 'started', number: 1, resultAvailable: false }])
+    if (path === '/student/attempts/resume-attempt') return json({
+      attempt: { id: 'resume-attempt', assessmentId: 'resume-assessment', status: 'started', deadlineAt: new Date(Date.now() + 3600000).toISOString() },
+      items: [{ id: 'resume-item', position: 1, flagged: false, answer: JSON.stringify(savedValue), revision, question: { id: 'resume-question', type: 'pg_tunggal', prompt: 'Pilihan pemulihan?', points: 1, config: { choices: [{ id: 'a', text: 'Pilihan baru' }, { id: 'b', text: 'Pilihan server' }] } } }],
+    })
+    if (path === '/student/attempts/resume-attempt/items/resume-item/answer') {
+      savedValue = route.request().postDataJSON().value
+      return json({ revision: ++revision })
+    }
+    return route.fulfill({ status: 500, json: { error: `Unexpected: ${path}` } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Lanjutkan pengerjaan' }).click()
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { resumeReadWaiting?: boolean }).resumeReadWaiting)).toBe(true)
+  await expect(page.getByRole('radio')).toHaveCount(0)
+  if (mode === 'delayed') {
+    await expect(page.getByRole('status')).toHaveText('Memuat jawaban server dan perangkat…')
+    await page.evaluate(() => (window as typeof window & { releaseResume?: () => void }).releaseResume?.())
+  } else {
+    await expect(page.getByRole('alert')).toContainText('Antrean lokal sementara gagal dibaca.')
+    await expect(page.getByText('Jawaban lokal tidak dihapus.')).toBeVisible()
+    await page.getByRole('button', { name: 'Coba lagi' }).click()
+  }
+  await page.getByRole('radio', { name: 'Pilihan baru' }).check()
+  await expect.poll(() => savedValue).toBe('a')
+  await expect(page.getByRole('radio', { name: 'Pilihan baru' })).toBeChecked()
+  await expect(page.getByText('Semua jawaban sudah tersimpan di server.')).toBeVisible()
+})
+
 test('portal siswa tidak melebar horizontal pada ponsel, tablet, dan desktop', async ({ page }) => {
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     if (path === '/public/ujian-online/cek') return route.fulfill({ json: { accessToken: 'responsive-session', student: { id: 'student-1', nama: 'Siswa Uji' } } })
     if (path === '/student/assessments') return route.fulfill({ json: [{ id: 'assessment-1', kind: 'simulasi', title: 'Simulasi Numerasi', durationMinute: 45 }] })
     if (path === '/student/attempts') return route.fulfill({ json: [] })
@@ -235,6 +301,7 @@ test('navigasi pengerjaan aktif nyaman disentuh dan palet soal tetap mudah dijan
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/public/ujian-online/cek' && method === 'POST') return json({ accessToken: 'responsive-attempt', student: { id: 'student-responsive', nama: 'Siswa Responsif' } })

@@ -1,10 +1,11 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('riwayat soal menampilkan versi dan rollback membuat revisi baru', async ({ page }) => {
   const question = { id: 'question-1', revision: 2, title: 'Soal draf', type: 'pg_tunggal', prompt: 'Versi saat ini', description: '', configJson: JSON.stringify({ choices: [{ id: 'a', text: 'Benar' }, { id: 'b', text: 'Salah' }], correctIds: ['a'] }), answerJson: '"a"', rubricJson: '[]', points: 2, status: 'draft' }
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })

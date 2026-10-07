@@ -1,22 +1,7 @@
-export const questionTypes = [
-  ['pg_tunggal', 'Pilihan ganda'],
-  ['pg_kompleks', 'Pilihan ganda kompleks'],
-  ['dropdown', 'Dropdown'],
-  ['benar_salah', 'Benar / salah'],
-  ['menjodohkan', 'Menjodohkan'],
-  ['isian_singkat', 'Jawaban singkat'],
-  ['uraian', 'Paragraf / uraian'],
-  ['susun_urutan', 'Susun urutan'],
-  ['kisi_pg', 'Kisi pilihan tunggal'],
-  ['kisi_checkbox', 'Kisi kotak centang'],
-  ['skala_linear', 'Skala linear'],
-  ['rating', 'Rating'],
-  ['tanggal', 'Tanggal'],
-  ['waktu', 'Waktu / durasi'],
-  ['unggah_berkas', 'Unggah berkas'],
-] as const
-
-export type QuestionType = (typeof questionTypes)[number][0]
+import registry from '../../shared/question-types.json' with { type: 'json' }
+export type QuestionType = 'pg_tunggal' | 'pg_kompleks' | 'dropdown' | 'benar_salah' | 'menjodohkan' | 'isian_singkat' | 'uraian' | 'susun_urutan' | 'kisi_pg' | 'kisi_checkbox' | 'skala_linear' | 'rating' | 'tanggal' | 'waktu' | 'unggah_berkas'
+export const questionRegistry = registry as Array<{id:QuestionType;label:string;response:string;scoring:'automatic'|'manual';branching:boolean;akm:boolean;tka:boolean}>
+export const questionTypes: Array<readonly [QuestionType,string]> = questionRegistry.map(row=>[row.id,row.label] as const)
 export type ConfigRow = { id: string; text: string; correct?: boolean }
 export type QuestionConfig = Record<string, any>
 

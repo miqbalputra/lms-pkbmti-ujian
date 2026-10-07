@@ -10,12 +10,18 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@dnd-kit/dom": "^0.5.0",
+    "@dnd-kit/helpers": "^0.5.0",
+    "@dnd-kit/react": "^0.5.0",
+    "@hocuspocus/provider": "^4.7.0",
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.28.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
@@ -27,4 +33,3 @@
     "vite": "^8.2.0"
   }
 }
-

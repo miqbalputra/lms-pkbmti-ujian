@@ -1,4 +1,4 @@
-const CACHE = 'pkbm-cbt-shell-v1'
+const CACHE = 'pkbm-cbt-shell-v2-forms'
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest']
 
 self.addEventListener('install', (event) => {
@@ -13,7 +13,15 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const request = event.request
-  if (request.method !== 'GET' || new URL(request.url).pathname.startsWith('/api/')) return
+  const url = new URL(request.url)
+  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/realtime')) return
+  // Do not persist SSO tickets or access-link tokens as cache keys. The
+  // canonical shell contains no authenticated data; draft data lives in IDB.
+  if (request.mode === 'navigate') {
+    event.respondWith(fetch(request).catch(()=>caches.match('/index.html').then(cached=>cached||new Response('Offline',{status:503}))))
+    return
+  }
+  if (!['script','style','font','image','manifest'].includes(request.destination)) return
   event.respondWith(caches.match(request).then((cached) => {
     const refresh = fetch(request).then((response) => {
       if (response.ok && response.type === 'basic') {

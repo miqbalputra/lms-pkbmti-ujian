@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 test('kartu soal dan kontrol aksinya tetap rapi pada desktop, tablet, dan mobile', async ({ page }) => {
   const questions = Array.from({ length: 8 }, (_, index) => ({
@@ -15,6 +15,7 @@ test('kartu soal dan kontrol aksinya tetap rapi pada desktop, tablet, dan mobile
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })

@@ -123,7 +123,7 @@ func (s *Server) exportAssessmentReport(c *fiber.Ctx, format string) error {
 	if err := s.db.First(&assessment, "id = ? AND trashed_at IS NULL", c.Params("id")).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
+	if !s.canReadAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Akses ditolak")
 	}
 	filters, err := parseResultFilters(c)

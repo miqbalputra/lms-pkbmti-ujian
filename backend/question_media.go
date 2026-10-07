@@ -197,12 +197,35 @@ func (s *Server) downloadQuestionMedia(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "Media tidak ditemukan")
 	}
 	allowed := account.Role == "admin" || account.Role == "kepala_sekolah" || account.Role == "guru" && account.ID == media.OwnerID
+	if !allowed && account.Role == "guru" {
+		var docs []FormDocument
+		if err := s.db.Where("content_json LIKE ?", "%"+media.ID+"%").Find(&docs).Error; err != nil {
+			return err
+		}
+		for _, d := range docs {
+			if s.formRole(s.db, account, d) != "" {
+				allowed = true
+				break
+			}
+		}
+	}
 	if account.Role == "siswa" {
 		var count int64
-		if err := s.db.Table("attempt_items").Joins("JOIN attempts ON attempts.id = attempt_items.attempt_id").Where("attempts.student_id = ? AND attempt_items.snapshot_json LIKE ?", account.PesertaDidikID, "%"+media.ID+"%").Count(&count).Error; err != nil {
+		query := s.db.Table("attempt_items").Joins("JOIN attempts ON attempts.id = attempt_items.attempt_id").Where("attempts.student_id = ? AND attempt_items.snapshot_json LIKE ?", account.PesertaDidikID, "%"+media.ID+"%")
+		if scope, _ := c.Locals("assessmentScope").([]string); len(scope) > 0 {
+			query = query.Where("attempts.assessment_id IN ?", scope)
+		}
+		if err := query.Count(&count).Error; err != nil {
 			return err
 		}
 		allowed = count > 0
+		if !allowed {
+			var err error
+			allowed, err = s.studentCanReadFormHeader(c, account, media.ID)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if !allowed {
 		return fiber.NewError(fiber.StatusForbidden, "Akses media ditolak")

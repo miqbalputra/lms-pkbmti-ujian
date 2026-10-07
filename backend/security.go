@@ -8,6 +8,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/helmet"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
+	"time"
 )
 
 const cbtContentSecurityPolicy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'"
@@ -64,12 +66,20 @@ func httpsRedirect(forceHTTPS bool, publicBaseURL string) fiber.Handler {
 }
 
 func securityHeaders() fiber.Handler {
+	csp := cbtContentSecurityPolicy
+	if raw := env("COLLABORATION_PUBLIC_URL", ""); raw != "" && !strings.HasPrefix(raw, "/") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "wss" && !(u.Scheme == "ws" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"))) {
+			panic("COLLABORATION_PUBLIC_URL harus WSS tepercaya")
+		}
+		csp = strings.Replace(csp, "connect-src 'self'", "connect-src 'self' "+u.Scheme+"://"+u.Host, 1)
+	}
 	return helmet.New(helmet.Config{
 		ContentTypeNosniff:        "nosniff",
 		XFrameOptions:             "DENY",
 		HSTSMaxAge:                31536000,
 		HSTSExcludeSubdomains:     true,
-		ContentSecurityPolicy:     cbtContentSecurityPolicy,
+		ContentSecurityPolicy:     csp,
 		ReferrerPolicy:            "strict-origin-when-cross-origin",
 		PermissionPolicy:          "camera=(), microphone=(), geolocation=()",
 		CrossOriginEmbedderPolicy: "unsafe-none",
@@ -78,6 +88,24 @@ func securityHeaders() fiber.Handler {
 		XPermittedCrossDomain:     "none",
 		XDownloadOptions:          "noopen",
 		XDNSPrefetchControl:       "off",
+	})
+}
+
+func participantRateLimit() fiber.Handler {
+	return limiter.New(limiter.Config{Max: 15, Expiration: time.Minute,
+		// Schools commonly share a public IP. Bound retries per IP and claimed
+		// identity/code hash so normal concurrent participants are not locked out.
+		Next: func(c *fiber.Ctx) bool { return strings.HasSuffix(c.Path(), "/resolve") },
+		KeyGenerator: func(c *fiber.Ctx) string {
+			var in struct {
+				NISN string `json:"nisn"`
+			}
+			_ = c.BodyParser(&in)
+			return c.IP() + ":" + hash(strings.TrimSpace(in.NISN))
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(429).JSON(fiber.Map{"error": "Terlalu banyak percobaan. Tunggu satu menit lalu coba lagi."})
+		},
 	})
 }
 

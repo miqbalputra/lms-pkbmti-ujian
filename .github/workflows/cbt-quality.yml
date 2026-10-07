@@ -1,0 +1,81 @@
+name: CBT quality gates
+on: [push, pull_request]
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_DB: cbt_test, POSTGRES_USER: cbt_test, POSTGRES_PASSWORD: disposable-test-password }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cbt_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PG_TEST_DATABASE_URL: postgres://cbt_test:disposable-test-password@127.0.0.1:5432/cbt_test?sslmode=disable
+      CBT_LOAD_TEST_SESSIONS: '200'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.25' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: go test -count=1 ./...
+      - run: go vet ./...
+      - run: npm ci && npm run lint && npm run build
+        working-directory: frontend
+      - run: npm ci && npm test
+        working-directory: collaboration
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+      - name: Prepare real PostgreSQL fixtures
+        run: go test -run '^TestE2EPrepareFixture$' -count=1
+        working-directory: backend
+        env:
+          CBT_E2E_DATABASE_URL: ${{ env.PG_TEST_DATABASE_URL }}
+      - name: Start isolated API and collaboration host
+        run: |
+          go build -o /tmp/cbt-e2e ./backend
+          /tmp/cbt-e2e >/tmp/cbt-api.log 2>&1 &
+          echo $! >/tmp/cbt-api.pid
+          cd collaboration
+          node server.mjs >/tmp/cbt-collaboration.log 2>&1 &
+          echo $! >/tmp/cbt-collaboration.pid
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health && curl -fsS http://127.0.0.1:1234/health; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+        env:
+          APP_ENV: production
+          CBT_FORMS_ENABLED: 'true'
+          DATABASE_URL: ${{ env.PG_TEST_DATABASE_URL }}
+          JWT_SECRET: ci-only-jwt-secret-do-not-use-in-production-123456
+          CBT_COLLABORATION_SECRET: ci-only-collaboration-secret-not-for-production-123456
+          CBT_INTERNAL_URL: http://127.0.0.1:8080
+          PUBLIC_BASE_URL: http://127.0.0.1:4173
+          LMS_BASE_URL: http://127.0.0.1:58099
+          LMS_SYNC_INTERVAL: 1h
+      - run: npm run test:integration
+        working-directory: collaboration
+        env:
+          CBT_COLLABORATION_SECRET: ci-only-collaboration-secret-not-for-production-123456
+      - run: npx playwright test --config playwright.real.config.ts
+        working-directory: frontend
+      - name: Stop owned test services
+        if: always()
+        run: |
+          for pidfile in /tmp/cbt-api.pid /tmp/cbt-collaboration.pid; do
+            if test -f "$pidfile"; then kill "$(cat "$pidfile")" || true; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cbt-verification-diagnostics
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            /tmp/cbt-api.log
+            /tmp/cbt-collaboration.log

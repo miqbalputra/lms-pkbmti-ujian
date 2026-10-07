@@ -110,7 +110,7 @@ func (s *Server) listAttemptRecoveries(c *fiber.Ctx) error {
 		if s.db.First(&attempt, "id = ?", row.AttemptID).Error != nil || s.db.First(&assessment, "id = ?", attempt.AssessmentID).Error != nil {
 			continue
 		}
-		if !staffCanWrite(account, assessment.OwnerID) && account.Role != "kepala_sekolah" {
+		if !s.canReadAssessment(s.db, account, assessment) {
 			continue
 		}
 		var student MasterPeserta
@@ -144,7 +144,7 @@ func (s *Server) reviewAttemptRecovery(c *fiber.Ctx) error {
 	if err := s.db.First(&assessment, "id = ?", attempt.AssessmentID).Error; err != nil {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
-	if !staffCanWrite(account, assessment.OwnerID) {
+	if !s.canGradeAssessment(s.db, account, assessment) {
 		return fiber.NewError(403, "Anda tidak berwenang meninjau asesmen ini")
 	}
 	var updatedAttempt Attempt
@@ -190,8 +190,12 @@ func (s *Server) reviewAttemptRecovery(c *fiber.Ctx) error {
 			for _, recovered := range answers {
 				item := itemByID[recovered.ItemID]
 				var answer Answer
-				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&answer, "attempt_id = ? AND attempt_item_id = ?", updatedAttempt.ID, item.ID).Error; err != nil {
+				err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&answer, "attempt_id = ? AND attempt_item_id = ?", updatedAttempt.ID, item.ID).Error
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 					return err
+				}
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					answer = Answer{AttemptID: updatedAttempt.ID, AttemptItemID: item.ID}
 				}
 				value := strings.TrimSpace(string(recovered.Value))
 				if answer.ValueJSON == value {
@@ -199,6 +203,14 @@ func (s *Server) reviewAttemptRecovery(c *fiber.Ctx) error {
 				}
 				var snapshot questionSnapshot
 				_ = json.Unmarshal([]byte(item.SnapshotJSON), &snapshot)
+				if updatedAttempt.FormVersionID != "" {
+					if err := validateResponse(snapshot, decodeJSON(value), false); err != nil {
+						return err
+					}
+					if err := validateResponseAttachments(tx, item, snapshot, decodeJSON(value)); err != nil {
+						return err
+					}
+				}
 				correct, score, manual := grade(snapshot, value, item.Weight)
 				if err := tx.Create(&AttemptAnswerRevision{AttemptID: updatedAttempt.ID, AttemptItemID: item.ID, ActorID: account.ID, Source: "approved_late_recovery", Revision: answer.Revision + 1, ValueJSON: value}).Error; err != nil {
 					return err
@@ -215,7 +227,18 @@ func (s *Server) reviewAttemptRecovery(c *fiber.Ctx) error {
 				return err
 			}
 			updatedAttempt.Score, updatedAttempt.NeedsManual = 0, false
+			activeItems, err := activeAttemptItems(tx, updatedAttempt, attemptItems, saved)
+			if err != nil {
+				return err
+			}
+			active := map[string]bool{}
+			for _, item := range activeItems {
+				active[item.ID] = true
+			}
 			for _, answer := range saved {
+				if !active[answer.AttemptItemID] {
+					continue
+				}
 				if answer.ManualScore != nil {
 					updatedAttempt.Score += *answer.ManualScore
 				} else {
@@ -230,7 +253,13 @@ func (s *Server) reviewAttemptRecovery(c *fiber.Ctx) error {
 			} else {
 				updatedAttempt.Status = "completed"
 			}
-			if err := tx.Save(&updatedAttempt).Error; err != nil {
+			// Recalculate the approved branch, including new blank active items,
+			// while preserving the original submission timestamp.
+			submitted := now
+			if updatedAttempt.SubmittedAt != nil {
+				submitted = *updatedAttempt.SubmittedAt
+			}
+			if err := finalizeAttemptTx(tx, &updatedAttempt, submitted); err != nil {
 				return err
 			}
 			recovery.Status = "approved"

@@ -1,0 +1,389 @@
+.form-app {
+  --form-accent: #326698;
+  min-height: 100dvh;
+  background: #f0f3f8;
+  color: #24364d;
+  padding-bottom: 100px;
+  font-size: 15px;
+  overflow-x: clip;
+}
+.form-header-image { overflow: hidden; border-radius: 12px; background: #fff; }
+.form-header-image img { display: block; width: 100%; max-height: 160px; object-fit: cover; border: 0; }
+.form-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: #fff;
+  border-bottom: 1px solid #e1e7ee;
+  padding: 12px 20px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.form-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  background: #fff;
+  border-bottom: 1px solid #dbe3ed;
+}
+.form-tabs button {
+  min-height: 48px;
+  padding: 0 16px;
+  border-bottom: 3px solid transparent;
+  font-weight: 600;
+}
+.form-tabs button.active {
+  border-color: var(--form-accent);
+  color: var(--form-accent);
+}
+.form-content {
+  max-width: 800px;
+  margin: 24px auto;
+  display: grid;
+  gap: 20px;
+  padding: 0 16px;
+}
+.form-card {
+  min-width: 0;
+  border: 1px solid #dce3ee;
+  border-radius: 12px;
+  background: white;
+  padding: 24px;
+  box-shadow: 0 2px 5px #182e4c08;
+}
+.form-title-card {
+  border-top: 9px solid var(--form-accent);
+}
+.form-title-input {
+  font-size: 28px !important;
+  font-weight: 600;
+}
+.form-card input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.form-card select,
+.form-card textarea,
+.form-sheet input:not([type="checkbox"]):not([type="radio"]),
+.form-sheet select,
+.form-sheet textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid #d7e0ea;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.form-card textarea,
+.form-sheet textarea {
+  min-height: 80px;
+  resize: vertical;
+  line-height: 1.65;
+}
+.form-rich-editor {
+  min-height: 96px;
+  padding: 12px;
+  border: 1px solid #d7e0ea;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+  background: #fff;
+}
+.form-rich-editor[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: #64748b;
+  pointer-events: none;
+}
+.form-rich-editor:focus-visible { outline: 2px solid var(--form-accent); outline-offset: 2px; }
+.form-rich-editor[aria-readonly="true"] { background: #f8fafc; }
+.form-title-card input,
+.form-title-card textarea {
+  border: 0 !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+.form-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.form-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  color: #52667e;
+  cursor: pointer;
+}
+.form-icon:hover {
+  background: #edf2f7;
+}
+.form-icon:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.form-button {
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--form-accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+.form-button.secondary {
+  background: #fff;
+  color: var(--form-accent);
+  border: 1px solid #cad7e6;
+}
+.form-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.form-number {
+  background: #edf2f8;
+  color: var(--form-accent);
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-weight: 600;
+}
+.form-question {
+  border-left: 5px solid var(--form-accent);
+  display: grid;
+  gap: 16px;
+}
+.form-question-top {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+.form-question-top .form-field {
+  max-width: 320px;
+  flex: 1;
+}
+.form-question-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  border-top: 1px solid #e4eaf2;
+  padding-top: 12px;
+}
+.form-question-footer details {
+  flex: 1;
+  min-width: 160px;
+}
+.form-app summary {
+  min-height: 48px;
+  cursor: pointer;
+  display: list-item;
+  padding: 12px 0;
+  color: var(--form-accent);
+  font-weight: 600;
+}
+.form-template {
+  min-height: 48px;
+  padding: 8px;
+  color: var(--form-accent);
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.form-toolbar {
+  position: fixed;
+  top: 230px;
+  left: calc(50% + 420px);
+  background: #fff;
+  border: 1px solid #dbe3ed;
+  border-radius: 12px;
+  padding: 4px;
+  display: grid;
+  box-shadow: 0 3px 14px #20334616;
+  z-index: 20;
+}
+.form-move-bar {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 8px;
+  background: #f8fafc;
+  border-radius: 10px 10px 0 0;
+}
+.form-sortable {
+  min-width: 0;
+}
+.form-sortable > .form-card {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.form-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--form-accent);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+}
+.form-peer-caret { position: relative; border-left: 2px solid #1d4ed8; margin-left: 1px; }
+.form-peer-caret small { position: absolute; top: -18px; left: -2px; background: #1d4ed8; color: white; padding: 1px 4px; font-size: 10px; border-radius: 3px; white-space: nowrap; z-index: 1; }
+.form-notice {
+  max-width: 800px;
+  margin: 16px auto;
+  padding: 16px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+.form-overlay {
+  position: fixed;
+  inset: 0;
+  background: #15273b80;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.form-sheet {
+  width: min(100%, 680px);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+.form-bank-item {
+  text-align: left;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #d7e0ea;
+  border-radius: 10px;
+  min-height: 64px;
+  cursor: pointer;
+}
+.form-home {
+  max-width: 1000px;
+  margin: auto;
+  display: grid;
+  gap: 20px;
+}
+.form-home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 16px;
+}
+.form-app input[type="checkbox"],
+.form-app input[type="radio"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--form-accent);
+}
+@media (max-width: 1000px) {
+  .form-canvas {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .form-canvas > .form-header, .form-canvas > .form-tabs,
+  .form-canvas > .form-notice { flex-shrink: 0; }
+  .form-canvas > .form-content {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    overflow-y: auto;
+    margin: 0 auto;
+    padding: 16px 10px 24px;
+    scroll-padding-block: 20px;
+    align-content: start;
+  }
+  .form-canvas > .form-toolbar {
+    position: static;
+    transform: none;
+    flex-shrink: 0;
+    align-self: center;
+    margin: 4px auto 0;
+  }
+  .form-toolbar {
+    top: auto;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+  }
+  .form-header {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+  .form-header > div:last-child {
+    margin-left: auto;
+  }
+}
+@media (max-width: 600px) {
+  .form-content {
+    margin-top: 16px;
+    padding: 0 10px;
+    gap: 14px;
+  }
+  .form-card {
+    padding: 16px;
+  }
+  .form-title-input {
+    font-size: 24px !important;
+  }
+  .form-overlay {
+    padding: 0;
+    align-items: end;
+  }
+  .form-sheet {
+    max-height: 90dvh;
+    width: 100%;
+    border-radius: 18px 18px 0 0;
+    padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+  }
+  .form-question-top .form-field {
+    max-width: calc(100% - 50px);
+  }
+  .form-tabs {
+    gap: 0;
+  }
+  .form-header h1 {
+    max-width: 260px;
+  }
+  .form-header .form-icon {
+    width: 48px;
+  }
+  .form-notice {
+    margin: 12px;
+    font-size: 14px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .form-app * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

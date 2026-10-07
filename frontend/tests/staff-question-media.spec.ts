@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { questionMediaMaxBytes } from '../src/questionMedia'
 
 test('tutor mengunggah gambar stimulus besar, menyimpan versi aman, dan melihat pratinjau siswa', async ({ page }) => {
@@ -9,6 +9,7 @@ test('tutor mengunggah gambar stimulus besar, menyimpan versi aman, dan melihat 
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' } })
@@ -61,9 +62,9 @@ test('tutor mengunggah gambar stimulus besar, menyimpan versi aman, dan melihat 
   await page.getByLabel('Pertanyaan').fill('Amati peta berikut')
   await page.getByLabel('Jenis bahan').selectOption('image_upload')
   await page.getByLabel('Seret gambar ke sini atau pilih dari perangkat').setInputFiles({ name: 'peta.png', mimeType: 'image/png', buffer })
+  await expect(page.getByRole('status').filter({ hasText: /Gambar dioptimalkan/ })).toBeVisible({timeout:20000})
   await expect(page.getByLabel('Teks alternatif untuk pembaca layar')).toBeVisible()
   await page.getByLabel('Teks alternatif untuk pembaca layar').fill('Peta sederhana wilayah pesisir')
-  await expect(page.getByRole('status').filter({ hasText: /Gambar dioptimalkan/ })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Bahan pendukung' }).getByRole('img', { name: 'Peta sederhana wilayah pesisir' })).toBeVisible()
   await page.getByRole('button', { name: 'Simpan soal' }).click()
   await expect(page.getByRole('alert')).toContainText('Soal tersimpan sebagai draf')

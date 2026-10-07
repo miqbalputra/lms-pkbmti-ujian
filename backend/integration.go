@@ -508,6 +508,7 @@ type resultAnswer struct {
 	AutoScore                                     float64
 	ManualScore                                   *float64
 	Revision                                      int
+	Snapshot                                      map[string]any `json:"snapshot,omitempty"`
 }
 type resultPayload struct {
 	EventID    string         `json:"eventId"`
@@ -534,11 +535,29 @@ func (s *Server) enqueueAttemptResult(attemptID string) error {
 	if err := s.db.Where("attempt_id = ?", attempt.ID).Find(&answers).Error; err != nil {
 		return err
 	}
+	var items []AttemptItem
+	if err := s.db.Where("attempt_id = ?", attempt.ID).Order("position").Find(&items).Error; err != nil {
+		return err
+	}
+	active, err := activeAttemptItems(s.db, attempt, items, answers)
+	if err != nil {
+		return err
+	}
+	byID := map[string]AttemptItem{}
+	for _, item := range active {
+		byID[item.ID] = item
+	}
 	exported := make([]resultAnswer, 0, len(answers))
 	for _, answer := range answers {
-		var item AttemptItem
-		_ = s.db.First(&item, "id = ?", answer.AttemptItemID).Error
-		exported = append(exported, resultAnswer{AttemptItemID: answer.AttemptItemID, QuestionID: item.QuestionID, ValueJSON: answer.ValueJSON, Correct: answer.Correct, AutoScore: answer.AutoScore, ManualScore: answer.ManualScore, Comment: answer.Comment, Revision: answer.Revision})
+		item, ok := byID[answer.AttemptItemID]
+		if !ok {
+			continue
+		}
+		row := resultAnswer{AttemptItemID: answer.AttemptItemID, QuestionID: item.QuestionID, ValueJSON: answer.ValueJSON, Correct: answer.Correct, AutoScore: answer.AutoScore, ManualScore: answer.ManualScore, Comment: answer.Comment, Revision: answer.Revision}
+		if attempt.FormVersionID != "" {
+			row.Snapshot = safeSnapshot(item.SnapshotJSON)
+		}
+		exported = append(exported, row)
 	}
 	eventID := hash(attempt.ID + ":" + attempt.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	payload, _ := json.Marshal(resultPayload{EventID: eventID, Attempt: attempt, Assessment: assessment, Student: student, Answers: exported})

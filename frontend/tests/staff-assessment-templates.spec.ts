@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 
 const teacher = { id: 'teacher-1', username: 'tutor', nama: 'Tutor Uji', role: 'guru' }
 const templatePackage = { id: 'template-draft-1', ownerId: teacher.id, kind: 'ujian_online', title: 'Draf — Ujian Semester', description: '40 pilihan ganda + 5 esai · 90 menit', classId: '', subjectId: '', status: 'draft', durationMinute: 90, revision: 1 }
@@ -27,6 +27,7 @@ test('tutor membuat draf semester dari template dengan semua placeholder aman da
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: teacher })
@@ -75,6 +76,7 @@ test('tutor menduplikasi asesmen menjadi draf aman yang meminta kelas dan kode b
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname.replace('/api', '')
+    if (path === '/public/config') return route.fulfill({ json: { formsEnabled: false } })
     const method = request.method()
     const json = (data: unknown, status = 200) => route.fulfill({ status, json: data })
     if (path === '/auth/login' && method === 'POST') return json({ accessToken: 'staff-session', user: teacher })

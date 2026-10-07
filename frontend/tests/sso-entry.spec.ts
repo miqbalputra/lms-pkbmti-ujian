@@ -1,4 +1,10 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
+
+// Compatibility suite explicitly runs with the old entry flow, independently
+// of the feature flag of a local API used by the real integration suite.
+test.beforeEach(async ({page})=>{
+  await page.route('**/api/public/config',route=>route.fulfill({json:{formsEnabled:false}}))
+})
 
 test('login menjadikan akun LMS jalur utama CBT dan menjelaskan opsi lama', async ({ page }) => {
   await page.goto('/')

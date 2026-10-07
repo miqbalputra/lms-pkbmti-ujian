@@ -1,0 +1,17 @@
+[
+  {"id":"pg_tunggal","label":"Pilihan ganda","response":"choice","scoring":"automatic","branching":true,"akm":true,"tka":true},
+  {"id":"pg_kompleks","label":"Pilihan ganda kompleks","response":"choices","scoring":"automatic","branching":false,"akm":true,"tka":true},
+  {"id":"dropdown","label":"Dropdown","response":"choice","scoring":"automatic","branching":true,"akm":false,"tka":false},
+  {"id":"benar_salah","label":"Benar / salah","response":"boolean-grid","scoring":"automatic","branching":false,"akm":true,"tka":true},
+  {"id":"menjodohkan","label":"Menjodohkan","response":"pairs","scoring":"automatic","branching":false,"akm":true,"tka":false},
+  {"id":"isian_singkat","label":"Jawaban singkat","response":"text","scoring":"automatic","branching":false,"akm":true,"tka":false},
+  {"id":"uraian","label":"Paragraf / uraian","response":"text","scoring":"manual","branching":false,"akm":true,"tka":false},
+  {"id":"susun_urutan","label":"Susun urutan","response":"order","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"kisi_pg","label":"Kisi pilihan tunggal","response":"choice-grid","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"kisi_checkbox","label":"Kisi kotak centang","response":"choices-grid","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"skala_linear","label":"Skala linear","response":"number","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"rating","label":"Rating","response":"number","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"tanggal","label":"Tanggal","response":"date","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"waktu","label":"Waktu / durasi","response":"time","scoring":"automatic","branching":false,"akm":false,"tka":false},
+  {"id":"unggah_berkas","label":"Unggah berkas","response":"files","scoring":"manual","branching":false,"akm":false,"tka":false}
+]

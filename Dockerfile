@@ -3,6 +3,7 @@ WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend ./
+COPY shared /app/shared
 RUN npm run build
 
 FROM golang:1.25-alpine AS backend-build
@@ -10,6 +11,7 @@ WORKDIR /app
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY backend ./backend
+COPY shared ./shared
 RUN CGO_ENABLED=0 go build -o /cbt-server ./backend
 
 FROM alpine:3.21
@@ -21,4 +23,3 @@ USER cbt
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD wget --spider -q http://127.0.0.1:8080/health || exit 1
 CMD ["/app/cbt-server"]
-

@@ -11,8 +11,10 @@ import (
 )
 
 type authClaims struct {
-	Role      string `json:"role"`
-	StudentID string `json:"studentId,omitempty"`
+	Role          string   `json:"role"`
+	StudentID     string   `json:"studentId,omitempty"`
+	AssessmentIDs []string `json:"assessmentIds,omitempty"`
+	AccessLinkID  string   `json:"accessLinkId,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -31,7 +33,9 @@ func (s *Server) auth(c *fiber.Ctx) error {
 		}
 		return []byte(s.cfg.JWTSecret), nil
 	})
-	if err != nil || !token.Valid {
+	// Collaboration tickets share signing infrastructure but are never login
+	// credentials. Reject foreign audiences, including legacy sessions with no aud.
+	if err != nil || !token.Valid || len(claims.Audience) > 0 && !containsString(claims.Audience, "cbt-session") {
 		return fiber.NewError(401, "Sesi tidak valid atau telah berakhir")
 	}
 	var account CBTAccount
@@ -39,6 +43,35 @@ func (s *Server) auth(c *fiber.Ctx) error {
 		return fiber.NewError(401, "Akun tidak aktif")
 	}
 	c.Locals("account", account)
+	c.Locals("assessmentScope", claims.AssessmentIDs)
+	c.Locals("accessLinkID", claims.AccessLinkID)
+	if claims.AccessLinkID != "" && strings.HasPrefix(c.Path(), "/api/student/assessments") {
+		var link FormAccessLink
+		if s.db.First(&link, "id = ? AND revoked = false", claims.AccessLinkID).Error != nil || link.ExpiresAt != nil && !time.Now().Before(*link.ExpiresAt) {
+			return fiber.NewError(403, "Tautan akses sudah dicabut atau kedaluwarsa. Percobaan aktif masih dapat dilanjutkan dari riwayat.")
+		}
+	}
+	// A code-issued session cannot be reused for another assessment, including
+	// its attempts or private attachments. Legacy account/SSO sessions are unscoped.
+	if len(claims.AssessmentIDs) > 0 && strings.HasPrefix(c.Path(), "/api/student/") {
+		id := c.Params("id")
+		// Fiber's group middleware runs before dynamic route parameters are
+		// populated. Scope checks must also resolve the URL, not silently skip it.
+		parts := strings.Split(strings.Trim(c.Path(), "/"), "/")
+		if id == "" && len(parts) > 3 && (parts[2] == "assessments" || parts[2] == "attempts") {
+			id = parts[3]
+		}
+		if strings.Contains(c.Path(), "/attempts/") && id != "" {
+			var attempt Attempt
+			if s.db.Select("assessment_id").First(&attempt, "id = ?", id).Error != nil {
+				return fiber.NewError(404, "Percobaan tidak ditemukan")
+			}
+			id = attempt.AssessmentID
+		}
+		if id != "" && !containsString(claims.AssessmentIDs, id) {
+			return fiber.NewError(403, "Sesi hanya berlaku untuk asesmen yang diakses")
+		}
+	}
 	return c.Next()
 }
 func currentAccount(c *fiber.Ctx) CBTAccount {
