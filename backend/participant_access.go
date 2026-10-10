@@ -11,7 +11,7 @@ func assessmentOpen(a Assessment, now time.Time) bool {
 	return a.Status == "published" && !a.ResponsesPaused && a.TrashedAt == nil && (a.StartsAt == nil || !now.Before(*a.StartsAt)) && (a.EndsAt == nil || now.Before(*a.EndsAt))
 }
 func publicAssessment(a Assessment) fiber.Map {
-	return fiber.Map{"id": a.ID, "title": a.Title, "kind": a.Kind, "subjectId": a.SubjectID, "durationMinute": a.DurationMinute}
+	return fiber.Map{"id": a.ID, "title": a.Title, "kind": a.Kind, "subjectId": a.SubjectID, "durationMinute": a.DurationMinute, "startsAt": a.StartsAt, "endsAt": a.EndsAt}
 }
 func (s *Server) accessibleByCode(code, id string) ([]Assessment, error) {
 	code = strings.TrimSpace(code)

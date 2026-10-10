@@ -77,5 +77,5 @@ test('builder tidak menutupi identitas paket dan kontrol jadwal dapat dioperasik
   await page.getByRole('button', { name: 'Terbitkan asesmen' }).click()
   await expect(page.getByRole('alert')).toContainText('Tanggal selesai harus setelah tanggal mulai.')
   await page.getByRole('button', { name: '← Kembali' }).click()
-  await expect(page.getByRole('heading', { name: 'Ujian Online & Simulasi' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Ujian Online', exact: true })).toBeVisible()
 })

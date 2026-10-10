@@ -5,6 +5,7 @@ import { api, type Session } from './api'
 import { QuestionEditor } from './QuestionEditor'
 import { QuestionAnswerControl, StimulusContent, type Stimulus } from './QuestionAnswerControl'
 import type { QuestionConfig } from './questionTypes'
+import { useStudentUx } from './studentUx'
 
 type Question = {
   id: string; revision?: number; packageId?: string; packagePosition?: number; title: string; type: string; prompt: string; description?: string; configJson?: string; answerJson?: string; rubricJson?: string; stimulusJson?: string; points: number; status: string; subject?: string; grade?: number; tags?: string; templatePlaceholder?: boolean; [key: string]: unknown
@@ -48,6 +49,7 @@ function packageQuery(search: string) {
 }
 
 export function QuestionPackages({ session, notify }: { session: Session; notify: Notice }) {
+  const studentUx=useStudentUx()
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -317,7 +319,7 @@ export function QuestionPackages({ session, notify }: { session: Session; notify
     try { config = JSON.parse(question.configJson || '{}') as QuestionConfig } catch { config = {} }
     try { const parsed: unknown = JSON.parse(question.stimulusJson || '[]'); stimulus = Array.isArray(parsed) ? parsed as Stimulus[] : [] } catch { stimulus = [] }
     const studentQuestion = { id: question.id, title: question.title, type: question.type, prompt: question.prompt, description: question.description, config, points: question.points }
-    return <div className="mx-auto max-w-4xl space-y-4">
+    return <div className={`mx-auto max-w-4xl space-y-4 ${studentUx.enabled?'student-ux':''}`}>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-3 shadow-sm"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-wider text-brand">Pratinjau tampilan siswa</p><h2 className="truncate font-bold">{packageData.title}</h2></div><Link to={packagePath(packageId)} className="inline-flex min-h-11 items-center rounded-xl border px-4 font-semibold">← Kembali ke paket</Link></div>
       <article className="rounded-2xl border bg-white p-5 shadow-sm sm:p-8"><div className="mb-5 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">Ini pratinjau interaktif. Jawaban yang dipilih di sini tidak dikirim dan tidak mengubah nilai siswa.</div><StimulusContent rows={stimulus} accessToken={session.accessToken}/><p className="text-xs font-bold uppercase tracking-wider text-slate-500">{question.type.replaceAll('_', ' ')} · {question.points} poin</p><h1 className="mt-2 text-2xl font-bold">{question.title}</h1><p className="mt-3 whitespace-pre-wrap text-lg leading-relaxed">{question.prompt}</p>{question.description && <p className="mt-3 whitespace-pre-wrap text-sm text-slate-600">{question.description}</p>}<div className="mt-5"><QuestionAnswerControl question={studentQuestion} questionId={`package-preview-${question.id}`} value={previewAnswer} onChange={setPreviewAnswer} accessToken={session.accessToken}/></div></article>
     </div>

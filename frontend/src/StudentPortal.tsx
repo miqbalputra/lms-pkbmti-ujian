@@ -10,6 +10,8 @@ import { TkaExamPlayer } from './forms/TkaExamPlayer'
 import {TkaPreflight} from './forms/TkaPreflight'
 import { readableAnswer } from './answerText'
 import type { FormHeaderImage } from './forms/types'
+import { attemptStatusLabel, useStudentUx } from './studentUx'
+import { StudentResult, type StudentResultData } from './StudentResult'
 
 type Assessment = { id: string; kind: string; title: string; description?: string; instructions?: string; room?: string; className?: string; subjectName?: string; gradeLevel?: number; durationMinute: number; startsAt?: string; endsAt?: string; accessCodeRequired?: boolean }
 type Attempt = { id: string; assessmentId: string; status: string; deadlineAt?: string; score?: number }
@@ -18,7 +20,7 @@ type HistoryRow = { id: string; assessmentId: string; title: string; kind: strin
 type VerifiedCandidate = { id: string; name: string; nis?: string; nisn?: string; className?: string; gender?: string; learningGroup?: string }
 type Notice = { kind: 'ok' | 'error'; text: string } | null
 type FormDisplay = {title:string;themeColor?:string;font?:string;progressBar?:boolean;confirmationMessage?:string;headerImage?:FormHeaderImage|null}
-type Result = { attemptId?:string;canEdit?:boolean; available: boolean; status: string; pendingManual: boolean; title: string; score?: number; className?: string; showReview?: boolean; items?: Array<{ position: number; question: StudentQuestion; answer: string; correct?: boolean; score: number; weight: number }> }
+type Result = StudentResultData
 
 const parseAnswer = (raw?: string): unknown => {
   if (!raw) return ''
@@ -37,7 +39,8 @@ function Action({ children, variant = 'primary', className = '', ...props }: Rea
 }
 function StatusNote({ value }: { value: Notice }) { return value ? <div role="alert" className={`rounded-xl border p-3 text-sm ${value.kind === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{value.text}</div> : null }
 
-export function StudentPortal({ session, onLogout, formsEnabled=false }: { session: Session; onLogout: () => void; formsEnabled?:boolean }) {
+export function StudentPortal({ session, onLogout, formsEnabled:formsFlag=false }: { session: Session; onLogout: () => void; formsEnabled?:boolean }) {
+  const ux=useStudentUx(), formsEnabled=formsFlag||ux.enabled
   const location = useLocation()
   const navigate = useNavigate()
   const [assessments, setAssessments] = useState<Assessment[]>([])
@@ -70,6 +73,8 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
   const [result, setResult] = useState<Result | null>(null)
   const [lateReview, setLateReview] = useState(false)
   const [resultLoading, setResultLoading] = useState(false)
+  const [resultError,setResultError]=useState('')
+  const [resultRetry,setResultRetry]=useState(0)
   const [loading, setLoading] = useState(true)
   const [queueCount, setQueueCount] = useState(0)
   const [openingAttemptId, setOpeningAttemptId] = useState('')
@@ -87,7 +92,7 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
   const attemptRouteId=location.pathname.match(/^\/siswa\/upaya\/([^/]+)$/)?.[1]
   const resultRouteId=location.pathname.match(/^\/siswa\/hasil\/([^/]+)$/)?.[1]
   useEffect(()=>{if(formsEnabled&&!resultRouteId)setResult(null)},[formsEnabled,resultRouteId])
-  useEffect(()=>{if(formsEnabled&&resultRouteId){setResultLoading(true);void api<Result>(`/student/attempts/${encodeURIComponent(resultRouteId)}/results`,{},session).then(setResult).catch(e=>setNotice({kind:'error',text:e.message})).finally(()=>setResultLoading(false))}},[formsEnabled,resultRouteId,session.accessToken])
+  useEffect(()=>{if(!formsEnabled||!resultRouteId)return;let active=true;const controller=new AbortController();setResultLoading(true);setResultError('');if(ux.enabled)setResult(null);void api<Result>(`/student/attempts/${encodeURIComponent(resultRouteId)}/results`,{signal:controller.signal},session).then(value=>{if(active){setResult(value);if(ux.enabled)setNotice(null)}}).catch(e=>{if(active){setResultError(e.message);setNotice({kind:'error',text:e.message})}}).finally(()=>{if(active)setResultLoading(false)});return()=>{active=false;controller.abort()}},[formsEnabled,resultRouteId,session.accessToken,ux.enabled,resultRetry])
   useEffect(()=>{if(formsEnabled)void api<VerifiedCandidate>('/student/identity',{},session).then(setRosterIdentity).catch(e=>setNotice({kind:'error',text:e.message}))},[formsEnabled,session.accessToken])
 
   useEffect(() => { latestItems.current = items }, [items])
@@ -134,7 +139,9 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
     const tick = () => setNow(Date.now())
     const timer = window.setInterval(tick, 1000)
     window.addEventListener('focus', tick)
-    return () => { window.clearInterval(timer); window.removeEventListener('focus', tick) }
+    document.addEventListener('visibilitychange',tick)
+    window.addEventListener('online',tick)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', tick);document.removeEventListener('visibilitychange',tick);window.removeEventListener('online',tick) }
   }, [])
 
   const openAttempt = useCallback(async (attemptId: string) => {
@@ -355,12 +362,14 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
     navigate('/', { replace: true })
   }
   async function startSelected() {
-    if (!selected) return
+    if (!selected || verifyBusy) return
     if (!confirmAccepted) { setNotice({ kind: 'error', text: 'Centang konfirmasi kesiapan sebelum memulai tes.' }); return }
+    setVerifyBusy(true)
     try {
       const next = await api<Attempt>(`/student/assessments/${selected.id}/start`, { method: 'POST', body: JSON.stringify({ accessCode }) }, session)
       await openAttempt(next.id)
     } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Asesmen belum dapat dimulai.' }) }
+    finally { setVerifyBusy(false) }
   }
   async function toggleFlag(item: AttemptItem) {
     try {
@@ -382,7 +391,7 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
       setSummaryOpen(false)
       setNotice({ kind: 'ok', text: response.showResult ? `Jawaban terkirim. Nilai: ${response.score}` : 'Jawaban berhasil dikirim. Hasil mengikuti kebijakan asesmen.' })
       await reloadLists()
-      if (response.showResult || formsEnabled) await showResult(attempt.id)
+      if (response.showResult || formsEnabled) await showResult(attempt.id, ux.enabled)
       return true
     } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Pengiriman jawaban gagal.' }); return false }
   }
@@ -396,14 +405,22 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
     await api(`/student/attempts/${attempt.id}/items/${item.id}/files/${fileId}`, { method: 'DELETE' }, session)
   }
   async function downloadFile(fileId: string, name: string) {
-    if (!attempt) return
-    const response = await fetch(`/api/student/attempts/${attempt.id}/files/${fileId}`, { headers: { Authorization: `Bearer ${session.accessToken}` } })
+    const attemptId=result?.attemptId||attempt?.id
+    if (!attemptId) return
+    const response = await fetch(`/api/student/attempts/${attemptId}/files/${fileId}`, { headers: { Authorization: `Bearer ${session.accessToken}` } })
     if (!response.ok) { setNotice({ kind: 'error', text: 'Berkas tidak dapat diunduh.' }); return }
     const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url)
   }
-  async function showResult(attemptId: string) {
+  async function showResult(attemptId: string, receipt=false) {
+    if(ux.enabled){
+      // A successful submit must leave the editor even if loading the receipt
+      // fails. The deep link owns fetching/retry and never resubmits answers.
+      setResult(null);setResultError('');setResultLoading(true);setResultRetry(n=>n+1)
+      navigate(`/siswa/hasil/${encodeURIComponent(attemptId)}${receipt?'?tampilan=bukti':''}`)
+      return
+    }
     setResultLoading(true)
-    try { setResult(await api<Result>(`/student/attempts/${attemptId}/results`, {}, session)); if(formsEnabled)navigate(`/siswa/hasil/${encodeURIComponent(attemptId)}`) }
+    try { setResult(await api<Result>(`/student/attempts/${attemptId}/results`, {}, session)); if(formsEnabled)navigate(`/siswa/hasil/${encodeURIComponent(attemptId)}${receipt?'?tampilan=bukti':''}`) }
     catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Hasil belum dapat dibuka.' }) }
     finally { setResultLoading(false) }
   }
@@ -421,7 +438,7 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
       setAttempt({ ...current, status: response.status, score: response.score })
       setNotice({ kind: 'ok', text: pending.current.size ? 'Waktu berakhir. Jawaban tersimpan server sudah dikunci; perubahan lokal dapat diajukan terpisah untuk ditinjau tutor.' : 'Waktu berakhir dan jawaban yang tersimpan di server telah dikunci.' })
       if (pending.current.size) setLateReview(true)
-      else if (response.showResult || formsEnabled) await showResult(current.id)
+      else if (response.showResult || formsEnabled) await showResult(current.id, ux.enabled)
       await reloadLists()
     } catch (error) { setNotice({ kind: 'error', text: error instanceof Error ? error.message : 'Penutupan asesmen sedang diproses server.' }) }
   }
@@ -444,6 +461,24 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
   const remaining = attempt?.deadlineAt ? Math.max(0, new Date(attempt.deadlineAt).getTime() - (now + serverOffset)) : 0
   const timerText = `${String(Math.floor(remaining / 3600000)).padStart(2, '0')}:${String(Math.floor(remaining / 60000) % 60).padStart(2, '0')}:${String(Math.floor(remaining / 1000) % 60).padStart(2, '0')}`
   const active = Boolean(attempt && ['started'].includes(attempt.status))
+  useEffect(()=>{
+    if(!ux.enabled||!active||!attempt?.id)return
+    const id=attempt.id,controller=new AbortController();let refreshing=false,lastRefresh=0
+    const refresh=async()=>{
+      if(refreshing||!navigator.onLine||document.hidden||Date.now()-lastRefresh<15000)return
+      refreshing=true;lastRefresh=Date.now()
+      try{
+        const data=await api<{serverTime?:string;attempt:Attempt}>(`/student/attempts/${id}`,{signal:controller.signal},session)
+        if(controller.signal.aborted||latestAttempt.current?.id!==id)return
+        if(data.serverTime)setServerOffset(new Date(data.serverTime).getTime()-Date.now())
+        setNow(Date.now())
+        setAttempt(current=>current?.id===id?{...current,deadlineAt:data.attempt.deadlineAt}:current)
+      }catch{/* Keep acknowledged answers and the last server deadline intact. */}
+      finally{refreshing=false}
+    }
+    window.addEventListener('focus',refresh);window.addEventListener('online',refresh);document.addEventListener('visibilitychange',refresh)
+    return()=>{controller.abort();window.removeEventListener('focus',refresh);window.removeEventListener('online',refresh);document.removeEventListener('visibilitychange',refresh)}
+  },[ux.enabled,active,attempt?.id,session.accessToken])
   const visibleItems=activeItemIds?items.filter(i=>activeItemIds.includes(i.id)):items
   const visibleIndex=Math.max(0,visibleItems.findIndex(i=>i.id===item?.id))
   useEffect(()=>{if(!formsEnabled||attemptRouteId!==attempt?.id)return;const n=Math.max(0,Number(new URLSearchParams(location.search).get('soal')||1)-1);const target=visibleItems[n];if(target)setIndex(items.findIndex(i=>i.id===target.id))},[formsEnabled,attemptRouteId,attempt?.id,location.search,activeItemIds,items.length])
@@ -476,6 +511,8 @@ export function StudentPortal({ session, onLogout, formsEnabled=false }: { sessi
 
   if (openingAttemptId) return <main className="grid min-h-screen place-items-center bg-slate-50 p-4"><Panel className="w-full max-w-xl space-y-4 p-6">{attemptLoadError ? <><h1 className="text-xl font-bold">Pengerjaan belum dapat dipulihkan</h1><p role="alert" className="text-rose-800">{attemptLoadError}</p><p className="text-sm text-slate-600">Jawaban lokal tidak dihapus. Coba lagi agar versi server dan perangkat dipulihkan sebelum melanjutkan.</p><Action onClick={() => void openAttempt(openingAttemptId)}>Coba lagi</Action></> : <><h1 className="text-xl font-bold">Memulihkan pengerjaan</h1><p role="status" className="text-slate-600">Memuat jawaban server dan perangkat…</p><p className="text-sm text-slate-500">Mohon tunggu sebelum menjawab. Waktu ujian tetap mengikuti tenggat server.</p></>}</Panel></main>
 
+if(ux.enabled&&resultRouteId&&(resultLoading||!result||result.attemptId!==resultRouteId))return <main className="tka-shell student-ux"><section className="student-result"><div className="student-result-card"><h1>{resultError?'Hasil belum dapat dibuka':'Memuat hasil…'}</h1>{resultError?<><p role="alert" className="my-4">{resultError}</p><div className="student-result-actions"><button onClick={()=>void showResult(resultRouteId,new URLSearchParams(location.search).get('tampilan')==='bukti')}>Coba lagi</button><button onClick={()=>navigate('/')}>Kembali ke daftar asesmen</button></div></>:<p role="status">Memeriksa bukti pengumpulan dan kebijakan hasil di server.</p>}</div></section></main>
+if(result&&ux.enabled)return <StudentResult result={result} receipt={new URLSearchParams(location.search).get('tampilan')==='bukti'} accessToken={session.accessToken} onReturn={()=>{setResult(null);navigate('/');void reloadLists()}} onResults={()=>navigate(`/siswa/hasil/${result.attemptId}`)} onEdit={()=>void editSubmittedResponse()} onDownload={(id,name)=>void downloadFile(id,name)} notice={<StatusNote value={notice}/>}/>
 if (result) return <main className="min-h-screen bg-slate-50 p-4"><div className="mx-auto max-w-3xl space-y-4"><Panel className="overflow-hidden"><div className="bg-brand p-6 text-white"><p className="text-sm font-bold uppercase tracking-wide text-cyan-100">Hasil asesmen</p><h1 className="mt-1 text-2xl font-bold">{result.title}</h1></div><div className="space-y-4 p-6"><p className="text-slate-700">{result.available ? `Nilai: ${result.score}` : result.pendingManual ? 'Jawaban uraian/berkas sedang menunggu penilaian tutor.' : 'Hasil belum dirilis oleh tutor.'}</p>{result.className && <p className="text-sm text-slate-500">Kelas saat ujian: {result.className}</p>}{result.items?.map((row) => <article className="rounded-xl border p-4" key={row.position}><p className="font-semibold">{row.position}. {row.question.prompt}</p><p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">Jawabanmu: {readableAnswer(row.question,parseAnswer(row.answer))}</p><p className="mt-1 text-sm">Skor {row.score} dari {row.weight}</p></article>)}{result.canEdit&&<Action variant="secondary" onClick={()=>void editSubmittedResponse()}>Edit respons (riwayat tetap dicatat)</Action>}<StatusNote value={notice}/><Action onClick={() => { setResult(null); if(formsEnabled)navigate('/'); void reloadLists() }}>Kembali ke daftar asesmen</Action></div></Panel></div></main>
 
   if (lateReview && attempt) return <main className="grid min-h-screen place-items-center bg-slate-50 p-4"><Panel className="w-full max-w-xl space-y-4 p-6"><p className="text-xs font-bold uppercase tracking-wider text-amber-800">Waktu ujian berakhir</p><h1 className="text-2xl font-bold">Jawaban lokal belum tersinkron</h1><p className="text-slate-600">Ada {pending.current.size} jawaban yang hanya tersimpan di perangkat ini. Kamu dapat mengajukannya kepada tutor untuk ditinjau. Pengajuan ini tidak langsung mengubah nilai.</p><StatusNote value={notice}/><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Action variant="secondary" onClick={() => setLateReview(false)}>Kembali ke riwayat</Action><Action onClick={() => void sendLateRecovery()} disabled={!navigator.onLine || !pending.current.size}><Send className="size-4"/>Ajukan ke tutor</Action></div></Panel></main>
@@ -539,7 +576,7 @@ if(formsEnabled)return <TkaExamPlayer headerImage={formDisplay?.headerImage} the
   const simulationHistory = history.filter((row) => row.kind === 'simulasi')
   const simulationScores = simulationHistory.filter((row) => row.resultAvailable && row.score !== undefined).map((row) => row.score as number)
   const averageSimulationScore = simulationScores.length ? Math.round(simulationScores.reduce((total, score) => total + score, 0) / simulationScores.length) : null
-  return <div className="min-h-screen bg-[#f3f7fb]"><header className="relative overflow-hidden bg-[#356b9a] text-white shadow-sm"><div aria-hidden="true" className="absolute inset-0 opacity-40 [background-image:linear-gradient(32deg,transparent_0_17%,rgba(255,255,255,.12)_17.2%_35%,transparent_35.2%),linear-gradient(145deg,transparent_0_28%,rgba(17,87,147,.55)_28.2%_56%,transparent_56.2%)]"/><div className="relative mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4"><div className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-full border border-white/30 bg-white/10"><GraduationCap/></span><div><p className="text-sm font-black tracking-wide">PKBM TUNAS ILMU</p><p className="text-xs text-blue-100">SIMULASI ANBK · TKA</p></div></div><div className="flex items-center gap-3"><span className="hidden text-right text-sm sm:block"><b>{session.user.nama}</b><br/><span className="text-blue-100">Peserta didik</span></span><Action variant="secondary" onClick={onLogout}><LogOut className="size-4"/>Keluar</Action></div></div></header>
+  return <div className={`min-h-screen bg-[#f3f7fb] ${ux.enabled?'student-ux':''}`}><header className="relative overflow-hidden bg-[#356b9a] text-white shadow-sm"><div aria-hidden="true" className="absolute inset-0 opacity-40 [background-image:linear-gradient(32deg,transparent_0_17%,rgba(255,255,255,.12)_17.2%_35%,transparent_35.2%),linear-gradient(145deg,transparent_0_28%,rgba(17,87,147,.55)_28.2%_56%,transparent_56.2%)]"/><div className="relative mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4"><div className="flex items-center gap-3"><span className="grid size-11 place-items-center rounded-full border border-white/30 bg-white/10"><GraduationCap/></span><div><p className="text-sm font-black tracking-wide">PKBM TUNAS ILMU</p><p className="text-xs text-blue-100">SIMULASI ANBK · TKA</p></div></div><div className="flex items-center gap-3"><span className="hidden text-right text-sm sm:block"><b>{session.user.nama}</b><br/><span className="text-blue-100">Peserta didik</span></span><Action variant="secondary" onClick={onLogout}><LogOut className="size-4"/>Keluar</Action></div></div></header>
   <main className="mx-auto max-w-5xl space-y-5 px-4 pb-8 pt-6 sm:pt-9"><StatusNote value={notice}/><section className="mx-auto -mt-2 max-w-2xl rounded-2xl border border-slate-100 bg-white p-5 text-center shadow-[0_18px_42px_rgba(15,23,42,.15)] sm:p-7"><span className="mx-auto grid size-14 place-items-center rounded-full bg-[#3d79ae] text-white shadow-md"><GraduationCap/></span><p className="mt-3 text-xs font-bold uppercase tracking-wider text-[#356b9a]">Ruang peserta · {session.user.nama}</p><h1 className="mt-1 text-2xl font-bold">{assessmentFilter === 'simulasi' ? 'Simulasi ANBK / TKA' : 'Pilih asesmen'}</h1><p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-slate-600">Pilih jenjang dan mata pelajaran. Daftar berikut hanya memuat asesmen yang ditugaskan kepadamu oleh tutor.</p>
     <div className="mt-5 grid gap-3 text-left sm:grid-cols-2"><label className="grid min-w-0 gap-1.5 text-sm font-semibold text-slate-700"><span>Jenjang pendidikan</span><select aria-label="Jenjang pendidikan" className="min-h-12 min-w-0 rounded-xl border border-slate-300 bg-white px-3" value={gradeFilter} onChange={(event) => updateSelection({ jenjang: event.target.value })}><option value="">Sesuai akun / semua jenjang</option>{(availableLevels.length ? availableLevels : [1, 2, 3]).map((level) => <option key={level} value={level}>{['Paket A / setara SD/MI', 'Paket B / setara SMP/MTs', 'Paket C / setara SMA/MA'][level - 1] || `Jenjang ${level}`}</option>)}</select></label>
     <label className="grid min-w-0 gap-1.5 text-sm font-semibold text-slate-700"><span>Jenis mata pelajaran</span><select aria-label="Jenis mata pelajaran" className="min-h-12 min-w-0 rounded-xl border border-slate-300 bg-white px-3" value={subjectCategoryFilter} onChange={(event) => updateSelection({ kategori_mapel: event.target.value })}><option value="wajib">Mata Pelajaran Wajib</option><option value="pilihan">Mata Pelajaran Pilihan</option></select></label>
@@ -548,7 +585,7 @@ if(formsEnabled)return <TkaExamPlayer headerImage={formDisplay?.headerImage} the
   <section aria-label="Pilih ruang peserta" className="grid gap-3 sm:grid-cols-2"><button type="button" aria-pressed={assessmentFilter === 'ujian_online'} onClick={() => updateSelection({ jenis: 'ujian_online', jenjang: '', mapel: '' })} className={`min-h-32 rounded-2xl border p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand sm:p-5 ${assessmentFilter === 'ujian_online' ? 'border-brand bg-sky-50 ring-1 ring-brand' : 'border-slate-200 bg-white hover:border-sky-300'}`}><span className="inline-flex min-h-8 items-center rounded-full bg-sky-100 px-3 text-xs font-bold text-sky-900">UJIAN FORMAL</span><span className="mt-2 block text-lg font-bold">Ujian Online</span><span className="mt-1 block text-sm text-slate-600">Ujian dari tutor dengan jadwal, kode akses, dan aturan pengerjaan.</span><span className="mt-3 inline-flex min-h-8 items-center gap-2 text-sm font-bold text-brand">{assessments.filter((row) => row.kind === 'ujian_online').length} tersedia <ChevronRight className="size-4"/></span></button><button type="button" aria-pressed={assessmentFilter === 'simulasi'} onClick={() => updateSelection({ jenis: 'simulasi' })} className={`min-h-32 rounded-2xl border p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-600 sm:p-5 ${assessmentFilter === 'simulasi' ? 'border-violet-700 bg-violet-50 ring-1 ring-violet-700' : 'border-slate-200 bg-white hover:border-violet-300'}`}><span className="inline-flex min-h-8 items-center rounded-full bg-violet-100 px-3 text-xs font-bold text-violet-900">LATIHAN MANDIRI</span><span className="mt-2 block text-lg font-bold">Simulasi Asesmen</span><span className="mt-1 block text-sm text-slate-600">Latihan dan tryout untuk membiasakan diri dengan bentuk asesmen.</span><span className="mt-3 flex min-h-8 flex-wrap items-center gap-x-2 text-sm font-bold text-violet-900">{assessments.filter((row) => row.kind === 'simulasi').length} tersedia <ChevronRight className="size-4"/></span><span className="mt-1 block text-xs font-medium text-slate-600">{simulationHistory.length} percobaan · {averageSimulationScore === null ? 'nilai belum tersedia' : `rata-rata nilai ${averageSimulationScore}`}</span></button></section>
   <div role="tablist" aria-label="Jenis asesmen" className="flex gap-2 overflow-x-auto rounded-2xl border bg-white p-2 shadow-sm">{filters.map((filter) => <button key={filter.id} type="button" role="tab" aria-selected={assessmentFilter === filter.id} onClick={() => updateSelection({ jenis: filter.id === 'semua' ? '' : filter.id, ...(filter.id === 'simulasi' ? {} : { jenjang: '', mapel: '' }) })} className={`min-h-11 shrink-0 rounded-xl px-4 text-sm font-semibold transition ${assessmentFilter === filter.id ? 'bg-brand text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}>{filter.label}{filter.id === 'semua' ? ` · ${assessments.length}` : ` · ${assessments.filter((row) => row.kind === filter.id).length}`}</button>)}</div>
   {loading ? <Panel className="p-6 text-slate-600">Memuat asesmen…</Panel> : visibleAssessments.length ? <div className="grid gap-3">{visibleAssessments.map((row) => { const activeAttempt = history.find((past) => past.assessmentId === row.id && past.status === 'started'); return <Panel key={row.id} className="overflow-hidden"><div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5"><div className="min-w-0"><span className="inline-flex min-h-7 items-center rounded-full bg-sky-50 px-3 text-xs font-bold text-brand">{row.kind === 'simulasi' ? 'Simulasi ANBK / TKA' : 'Ujian Online'}</span><h2 className="mt-2 text-lg font-bold">{row.title}</h2><p className="mt-1 text-sm text-slate-600">{row.subjectName || 'Mata pelajaran sesuai penugasan'}{row.className ? ` · ${row.className}` : ''}{row.room ? ` · ${row.room}` : ''}</p><p className="mt-1 text-xs text-slate-500">Durasi {row.durationMinute} menit{row.startsAt ? ` · Mulai ${new Date(row.startsAt).toLocaleString('id-ID')}` : ''}{row.endsAt ? ` · Tenggat ${new Date(row.endsAt).toLocaleString('id-ID')}` : ''}</p>{row.description && <p className="mt-2 line-clamp-2 text-sm text-slate-600">{row.description}</p>}</div><Action className="w-full shrink-0 sm:w-auto" onClick={() => activeAttempt ? void openAttempt(activeAttempt.id) : chooseAssessment(row)}><Play className="size-4"/>{activeAttempt ? 'Lanjutkan pengerjaan' : 'Pilih asesmen'}</Action></div></Panel> })}</div> : <Panel className="p-7 text-center"><FileCheck2 className="mx-auto size-9 text-slate-400"/><h2 className="mt-3 font-bold">{assessments.length ? 'Tidak ada asesmen pada kategori ini' : 'Belum ada asesmen yang ditugaskan'}</h2><p className="mt-1 text-sm text-slate-600">{assessments.length ? 'Pilih kategori lain untuk melihat penugasan yang tersedia.' : 'Jika kamu merasa seharusnya ada ujian, tanyakan kepada tutor.'}</p></Panel>}
-  {history.length > 0 && <Panel className="overflow-hidden"><div className="border-b p-4"><h2 className="font-bold">Riwayat pengerjaan</h2><p className="mt-1 text-sm text-slate-600">Hasil hanya terlihat sesuai kebijakan tutor.</p></div><div className="divide-y">{history.slice(0, 10).map((row) => <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><b>{row.title}</b><p className="mt-1 text-sm text-slate-500">Percobaan {row.number} · {row.status}</p></div>{row.resultAvailable ? <Action variant="secondary" onClick={() => void showResult(row.id)}>Lihat hasil{row.score !== undefined ? ` · ${row.score}` : ''}</Action> : row.status === 'pending_grade' ? <span className="text-sm text-amber-800">Menunggu penilaian</span> : <span className="text-sm text-slate-500">Hasil belum dirilis</span>}</div>)}</div></Panel>}<p className="text-center text-xs leading-relaxed text-slate-500">Simulasi mandiri PKBM Tunas Ilmu · Pola alur asesmen merujuk pada <a href="https://pusmendik.kemendikdasmen.go.id/tka/simulasi_tka/" target="_blank" rel="noreferrer" className="font-semibold text-[#356b9a] underline">Simulasi TKA Pusmendik</a>. Bukan aplikasi resmi pemerintah.</p></main>
+  {history.length > 0 && <Panel className="overflow-hidden"><div className="border-b p-4"><h2 className="font-bold">Riwayat pengerjaan</h2><p className="mt-1 text-sm text-slate-600">Hasil hanya terlihat sesuai kebijakan tutor.</p></div><div className="divide-y">{history.slice(0, 10).map((row) => <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><b>{row.title}</b><p className="mt-1 text-sm text-slate-500">Percobaan {row.number} · {ux.enabled?attemptStatusLabel(row.status):row.status}</p></div>{ux.enabled&&row.status==='started' ? <Action variant="secondary" onClick={()=>void openAttempt(row.id)}>Lanjutkan pengerjaan</Action> : row.resultAvailable ? <Action variant="secondary" onClick={() => void showResult(row.id)}>Lihat hasil{row.score !== undefined ? ` · ${row.score}` : ''}</Action> : row.status === 'pending_grade' ? <span className="text-sm text-amber-800">Menunggu penilaian</span> : <span className="text-sm text-slate-500">Hasil belum dirilis</span>}</div>)}</div></Panel>}<p className="text-center text-xs leading-relaxed text-slate-500">Simulasi mandiri PKBM Tunas Ilmu · Pola alur asesmen merujuk pada <a href="https://pusmendik.kemendikdasmen.go.id/tka/simulasi_tka/" target="_blank" rel="noreferrer" className="font-semibold text-[#356b9a] underline">Simulasi TKA Pusmendik</a>. Bukan aplikasi resmi pemerintah.</p></main>
   {resultLoading && <div className="fixed inset-0 z-50 grid place-items-center bg-white/80 text-slate-700" role="status">Memuat hasil…</div>}
   </div>
 }

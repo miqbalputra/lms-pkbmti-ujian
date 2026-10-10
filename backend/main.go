@@ -200,7 +200,7 @@ func main() {
 	api.Post("/public/assessments/resolve", participantLimit, s.resolveAssessmentCode)
 	api.Post("/public/assessments/login", participantLimit, s.publicExamLogin)
 	api.Get("/public/config", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"publicBaseUrl": s.cfg.PublicBaseURL, "formsEnabled": env("CBT_FORMS_ENABLED", "false") == "true"})
+		return c.JSON(publicUIConfig(s.cfg.PublicBaseURL))
 	})
 	api.Get("/question-media/:id", s.auth, s.downloadQuestionMedia)
 	student := api.Group("/student", s.auth, requireRoles("siswa"))
@@ -1553,7 +1553,7 @@ func (s *Server) studentAttemptResult(c *fiber.Ctx) error {
 		return fiber.NewError(404, "Asesmen tidak ditemukan")
 	}
 	visible := resultVisible(assessment, attempt)
-	result := fiber.Map{"attemptId": attempt.ID, "canEdit": canReopenFormResponse(s.db, attempt), "available": visible, "status": attempt.Status, "pendingManual": attempt.NeedsManual, "title": assessment.Title, "showReview": visible && assessment.ShowReview}
+	result := fiber.Map{"attemptId": attempt.ID, "canEdit": canReopenFormResponse(s.db, attempt), "available": visible, "status": attempt.Status, "pendingManual": attempt.NeedsManual, "title": assessment.Title, "kind": assessment.Kind, "submittedAt": attempt.SubmittedAt, "showReview": visible && assessment.ShowReview}
 	if !visible {
 		return c.JSON(result)
 	}

@@ -1,4 +1,4 @@
-const CACHE = 'pkbm-cbt-shell-v2-forms'
+const CACHE = 'pkbm-cbt-shell-v3-student-ux'
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest']
 
 self.addEventListener('install', (event) => {

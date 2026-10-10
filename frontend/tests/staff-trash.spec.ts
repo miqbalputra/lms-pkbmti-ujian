@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures'
+import { expect, navigateStaff, test } from './fixtures'
 
 test('kepala sekolah dapat membaca bank soal tanpa kontrol perubahan', async ({ page }) => {
   const question = {
@@ -22,7 +22,7 @@ test('kepala sekolah dapat membaca bank soal tanpa kontrol perubahan', async ({ 
   await page.getByLabel('Username CBT').fill('kepsek')
   await page.getByLabel('Kata sandi').fill('secret')
   await page.getByRole('button', { name: 'Masuk ke workspace' }).click()
-  await page.getByRole('button', { name: 'Bank Soal' }).click()
+  await navigateStaff(page, 'Bank Soal')
   await page.getByRole('link', { name: 'Pustaka soal lepas' }).click()
   await expect(page.getByText('Bacaan untuk ditinjau', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Buat soal' })).toHaveCount(0)

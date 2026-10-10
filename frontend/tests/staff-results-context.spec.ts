@@ -1,6 +1,7 @@
 import { expect, test } from './fixtures'
 
 test('halaman Hasil menyediakan filter siswa/kelas/status/tanggal dan mengunduh laporan sesuai filter', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
   let exportedURL = ''
   await page.route('**/api/**', async (route) => {
     const request = route.request()

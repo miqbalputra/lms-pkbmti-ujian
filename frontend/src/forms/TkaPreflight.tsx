@@ -1,5 +1,6 @@
 import { GraduationCap, ChevronLeft, Play } from "lucide-react";
 import "./tka.css";
+import { useStudentUx } from '../studentUx';
 
 export type RosterIdentity = {
   id: string;
@@ -28,6 +29,8 @@ export function TkaPreflight({
 }: {
   assessment: {
     title: string;
+    kind?: string;
+    accessCodeRequired?: boolean;
     subjectName?: string;
     durationMinute: number;
     instructions?: string;
@@ -48,6 +51,9 @@ export function TkaPreflight({
   notice: React.ReactNode;
   resume?: () => void;
 }) {
+  const ux=useStudentUx();
+  const codeNeeded=assessment.accessCodeRequired!==false;
+  const disabledReason=!navigator.onLine?'Hubungkan internet untuk melanjutkan.':!student?'Data peserta sedang dimuat.':step==='identity'&&codeNeeded&&!code.trim()&&!resume?'Masukkan token yang diberikan tutor.':step==='confirm'&&!accepted?'Centang pernyataan kesiapan setelah membaca panduan.':'';
   const identity = [
     ["Nama Peserta", student?.name],
     ["NIS", student?.nis],
@@ -65,7 +71,7 @@ export function TkaPreflight({
   ];
   return (
     <main
-      className={`tka-preflight ${step === "confirm" ? "confirmation" : ""}`}
+      className={`tka-preflight ${step === "confirm" ? "confirmation" : ""} ${ux.enabled?'student-ux':''}`}
     >
       <header className="tka-header">
         <div className="flex items-center gap-3">
@@ -98,6 +104,7 @@ export function TkaPreflight({
           </aside>
         )}
         <section className="tka-preflight-card">
+          {ux.enabled&&<><p className="student-pane-title">{assessment.kind==='simulasi'?'Simulasi latihan':'Ujian Online formal'}</p><ol className="student-steps" aria-label="Persiapan asesmen"><li aria-current={step==='identity'?'step':undefined}>1. Data peserta</li><li aria-current={step==='confirm'?'step':undefined}>2. Siap mulai</li></ol><p className="mb-4 font-semibold">{assessment.title} · {assessment.durationMinute} menit</p></>}
           <h1>
             {step === "identity" ? "Konfirmasi data Peserta" : "Konfirmasi Tes"}
           </h1>
@@ -133,7 +140,7 @@ export function TkaPreflight({
               </p>
               <button
                 className="tka-entry-submit"
-                disabled={busy || !student || !navigator.onLine || !code.trim()}
+                disabled={busy || !student || !navigator.onLine || (ux.enabled ? codeNeeded&&!code.trim()&&!resume : !code.trim())}
                 onClick={resume || onVerify}
               >
                 {busy
@@ -142,6 +149,7 @@ export function TkaPreflight({
                     ? "Lanjutkan percobaan"
                     : "Verifikasi & lanjutkan"}
               </button>
+              {ux.enabled&&disabledReason&&<p className="student-disabled-reason">{disabledReason}</p>}
             </>
           ) : (
             <>
@@ -192,6 +200,7 @@ export function TkaPreflight({
                 <Play size={18} />
                 Mulai tes
               </button>
+              {ux.enabled&&disabledReason&&<p className="student-disabled-reason">{disabledReason}</p>}
               <button
                 className="min-h-12 w-full text-blue-700"
                 onClick={onIdentity}

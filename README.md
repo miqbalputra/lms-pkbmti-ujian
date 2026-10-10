@@ -6,6 +6,9 @@ Panduan kanvas kolaboratif, alur peserta, feature flag, dan gerbang rilis:
 [Editor Forms dan ruang siswa TKA](docs/FORMS-ROLLOUT.md). Fitur baru tetap
 nonaktif secara default sampai verifikasi staging dan pilot selesai.
 
+Alur siswa dan gambar responsif memiliki flag terpisah `CBT_STUDENT_UX_ENABLED`.
+Panduan aktivasi, rollback, bukti uji, dan pilot: [Penyempurnaan UX siswa](docs/STUDENT-UX-ROLLOUT.md).
+
 ## Menjalankan lokal
 
 1. Salin `.env.example` menjadi `.env` dan isi nilai rahasia.

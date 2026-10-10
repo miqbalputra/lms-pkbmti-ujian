@@ -1,13 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 
 // Focus containment and restoration for both desktop dialogs and mobile sheets.
-export function useDialogFocus(open: boolean, onClose: () => void) {
+export function useDialogFocus(open: boolean, onClose: () => void, target?: RefObject<HTMLElement | null>) {
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    const dialog = target?.current || document.querySelector<HTMLElement>('[role="dialog"]');
     if (!dialog) return;
     const selector =
       'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]';

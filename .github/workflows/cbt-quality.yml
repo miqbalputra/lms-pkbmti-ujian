@@ -21,7 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - run: go test -count=1 ./...
+        working-directory: backend
       - run: go vet ./...
+        working-directory: backend
       - run: npm ci && npm run lint && npm run build
         working-directory: frontend
       - run: npm ci && npm test
@@ -37,7 +39,7 @@ jobs:
           CBT_E2E_DATABASE_URL: ${{ env.PG_TEST_DATABASE_URL }}
       - name: Start isolated API and collaboration host
         run: |
-          go build -o /tmp/cbt-e2e ./backend
+          go -C backend build -o /tmp/cbt-e2e .
           /tmp/cbt-e2e >/tmp/cbt-api.log 2>&1 &
           echo $! >/tmp/cbt-api.pid
           cd collaboration
@@ -79,3 +81,25 @@ jobs:
             frontend/test-results
             /tmp/cbt-api.log
             /tmp/cbt-collaboration.log
+  student-visual:
+    # Compare against reviewed Windows baselines on the same OS. Linux above
+    # runs every functional scenario and records screenshots, never accepting
+    # platform-specific baseline changes automatically.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install chromium
+        working-directory: frontend
+      - run: npm run test:e2e -- --workers=2
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cbt-student-visual-diagnostics
+          path: |
+            frontend/playwright-report
+            frontend/test-results

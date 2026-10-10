@@ -1,6 +1,7 @@
 import { expect, navigateStaff, test } from './fixtures'
 
 test('staff can inspect class schedule and a live participant monitor', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
   let monitorReads = 0
   const schedule = [
     { id: 'exam-a', title: 'Ujian Paket A', kind: 'ujian_online', classId: 'class-a', room: 'Lab Komputer', status: 'published', durationMinute: 60, startsAt: '2026-10-03T02:00:00Z', endsAt: '2026-10-03T03:00:00Z' },
@@ -43,7 +44,7 @@ test('staff can inspect class schedule and a live participant monitor', async ({
 
   await navigateStaff(page, 'Monitor live')
   await expect(page.getByRole('heading', { name: 'Monitor ujian live' })).toBeVisible()
-  await expect(page.getByText('Siswa Satu')).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'Siswa Satu', exact: true })).toBeVisible()
   await expect(page.getByRole('cell', { name: 'Mengerjakan' })).toBeVisible()
   await expect(page.getByRole('cell', { name: 'Selesai' })).toBeVisible()
   await expect.poll(() => monitorReads, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)

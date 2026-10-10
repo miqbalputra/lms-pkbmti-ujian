@@ -3,10 +3,13 @@ import { GraduationCap, KeyRound, UserRound, Eye, EyeOff } from "lucide-react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { api, type Session } from "../api";
 import "./tka.css";
+import '../student-ux.css';
 
 let entryCode = "";
 export const takeEntryCode = () => entryCode;
-export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
+export function StudentEntry({ onLogin, uxEnabled=false }: { onLogin: (s: Session) => void; uxEnabled?: boolean }) {
+  const [online,setOnline]=useState(navigator.onLine);
+  useEffect(()=>{const sync=()=>setOnline(navigator.onLine);window.addEventListener('online',sync);window.addEventListener('offline',sync);return()=>{window.removeEventListener('online',sync);window.removeEventListener('offline',sync)}},[]);
   const [step, setStep] = useState<"code" | "choose" | "login">("code"),
     [code, setCode] = useState(""),
     [nisn, setNisn] = useState(""),
@@ -18,6 +21,9 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
         kind: string;
         gradeLevel: number;
         subjectName: string;
+        durationMinute?: number;
+        startsAt?: string;
+        endsAt?: string;
       }>
     >([]),
     [error, setError] = useState(""),
@@ -43,6 +49,7 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
       .finally(() => setBusy(false));
   }, [linkToken]);
   async function resolve() {
+    if(busy||!online)return;
     setBusy(true);
     setError("");
     try {
@@ -61,6 +68,7 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
     }
   }
   async function login() {
+    if(busy||!online||!selected)return;
     setBusy(true);
     setError("");
     try {
@@ -89,7 +97,7 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
   const choice = rows.find((row) => row.id === selected),
     grade = choice?.gradeLevel || 0;
   return (
-    <main className={`tka-entry ${step === "login" ? "login" : ""}`}>
+    <main className={`tka-entry ${step === "login" ? "login" : ""} ${uxEnabled?'student-ux':''}`}>
       <header className="tka-entry-brand">
         <GraduationCap size={44} />
         <div>
@@ -98,6 +106,7 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
         </div>
       </header>
       <section className="tka-entry-card">
+        {uxEnabled&&<ol className="student-steps" aria-label="Tahap masuk"><li aria-current={step==='code'?'step':undefined}>1. Kode</li><li aria-current={step==='choose'?'step':undefined}>2. Asesmen</li><li aria-current={step==='login'?'step':undefined}>3. Masuk</li></ol>}
         <div className="tka-entry-icon">
           <GraduationCap size={32} />
         </div>
@@ -141,6 +150,7 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
           )}
           {step === "choose" && (
             <>
+              {uxEnabled&&rows.length===0&&<p role="status">Tidak ada asesmen tersedia untuk kode ini. Periksa kode atau tanyakan kepada tutor.</p>}
               <label className="tka-entry-field">
                 <span>Jenjang Pendidikan</span>
                 <input
@@ -148,6 +158,8 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
                   value={
                     !grade
                       ? "Sesuai penugasan"
+                      : grade <= 3
+                        ? ['SD / Paket A','SMP / Paket B','SMA / Paket C'][grade-1]
                       : grade <= 6
                         ? "SD / Paket A"
                         : grade <= 9
@@ -171,12 +183,15 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
                   ))}
                 </select>
               </label>
+              {uxEnabled&&choice&&<div className="rounded-xl bg-blue-50 p-3 text-left text-sm"><p className="font-semibold">{choice.kind==='simulasi'?'Simulasi latihan':'Ujian Online formal'}</p><p>{choice.subjectName||'Mapel sesuai paket'}{choice.durationMinute?` · ${choice.durationMinute} menit`:''}</p>{choice.startsAt&&<p>Mulai: {new Date(choice.startsAt).toLocaleString('id-ID')}</p>}{choice.endsAt&&<p>Batas akses: {new Date(choice.endsAt).toLocaleString('id-ID')}</p>}</div>}
             </>
           )}
           {step === "login" && (
             <>
               <div className="rounded-xl bg-blue-50 p-3 text-sm">
                 {choice?.title}
+                {uxEnabled&&<p className="mt-1">{choice?.kind==='simulasi'?'Simulasi latihan':'Ujian Online formal'}{choice?.subjectName?` · ${choice.subjectName}`:''}</p>}
+                {uxEnabled&&choice?.durationMinute&&<p>{choice.durationMinute} menit</p>}
               </div>
               <label className="tka-entry-field">
                 <span>
@@ -202,7 +217,7 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
                     className="pr-14"
                     type={visible ? "text" : "password"}
                     autoComplete="off"
-                    required
+                    required={!linkToken}
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
                   />
@@ -226,7 +241,8 @@ export function StudentEntry({ onLogin }: { onLogin: (s: Session) => void }) {
               {error}
             </p>
           )}
-          <button className="tka-entry-submit" disabled={busy}>
+          {uxEnabled&&(!online||step==='choose'&&!selected||step==='login'&&!nisn.trim()||step==='code'&&!code.trim())&&<p className="student-disabled-reason">{!online?'Hubungkan internet untuk melanjutkan.':step==='choose'?'Belum ada asesmen yang dipilih.':step==='login'?'Isi NISN untuk masuk.':'Isi kode dari tutor untuk melihat asesmen.'}</p>}
+          <button className="tka-entry-submit" disabled={busy || uxEnabled&&(!online||step==='choose'&&!selected||step==='login'&&!nisn.trim()||step==='code'&&!code.trim())}>
             {busy
               ? "Memeriksa…"
               : step === "code"

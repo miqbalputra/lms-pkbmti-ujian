@@ -19,6 +19,8 @@ import { questionTypes } from "../questionTypes";
 import { useDialogFocus } from "./useDialogFocus";
 import { RichText } from "./RichText";
 import type { FormHeaderImage } from './types';
+import { useStudentUx } from '../studentUx';
+import '../student-ux.css';
 import "./forms.css";
 import "./tka.css";
 
@@ -94,15 +96,23 @@ export function TkaExamPlayer({
   const [params,setParams] = useSearchParams();
   const modal = ["info","palette","submit"].includes(params.get("dialog")||"") ? params.get("dialog")! : "";
   const setModal = (value:string) => {const next = new URLSearchParams(window.location.search);if(value)next.set("dialog",value);else next.delete("dialog");setParams(next)};
-  const [font, setFont] = useState(18),
+  const ux = useStudentUx();
+  const [online,setOnline]=useState(navigator.onLine);
+  useEffect(()=>{const update=()=>setOnline(navigator.onLine);window.addEventListener('online',update);window.addEventListener('offline',update);return()=>{window.removeEventListener('online',update);window.removeEventListener('offline',update)}},[]);
+  const [font, setFont] = useState(() => { try { const stored=Number(localStorage.getItem('cbt-student-font'));return ux.enabled&&[15,18,22].includes(stored)?stored:18 } catch { return 18 } }),
     [integrity, setIntegrity] = useState(false),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [submitError,setSubmitError]=useState('');
   const item = items[index],
     question = item?.question;
   useDialogFocus(Boolean(modal), () => setModal(""));
   const stimulus = useRef<HTMLDivElement>(null),
     positions = useRef(new Map<string, number>()),
     lastGroup = useRef("");
+  const answerPane=useRef<HTMLDivElement>(null), questionHeading=useRef<HTMLHeadingElement>(null);
+  useEffect(()=>{if(ux.enabled){try{localStorage.setItem('cbt-student-font',String(font))}catch{}}},[font,ux.enabled]);
+  useEffect(()=>{if(!ux.enabled)return;answerPane.current?.scrollTo(0,0);questionHeading.current?.focus({preventScroll:true});},[item?.id,ux.enabled]);
+  function jump(to:'stimulus'|'answer'){const node=to==='stimulus'?stimulus.current:answerPane.current;node?.focus({preventScroll:true});node?.scrollIntoView({block:'start',behavior:'auto'})}
   const group =
     question?.config?.stimulusGroupId ||
     JSON.stringify(question?.stimulus || []);
@@ -114,6 +124,7 @@ export function TkaExamPlayer({
   }, [group]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if(event.defaultPrevented || (event.target instanceof Element && event.target.closest('.student-image-dialog')))return;
       if (event.key === "Escape") {
         setModal("");
         return;
@@ -137,17 +148,19 @@ export function TkaExamPlayer({
   async function submit() {
     if (!integrity || busy) return;
     setBusy(true);
+    setSubmitError('');
     try {
       const path = window.location.pathname;
       // The portal navigates to the receipt on success. Do not let this
       // player's stale search-param closure navigate back over that receipt.
-      if (await onSubmit() && window.location.pathname === path) setModal("");
+      if(await onSubmit()){if(window.location.pathname===path)setModal("")}
+      else setSubmitError('Belum ada konfirmasi pengumpulan. Periksa status sinkronisasi dan koneksi, lalu coba lagi.');
     } finally {
       setBusy(false);
     }
   }
   return (
-    <main className="tka-shell" style={{fontFamily: formFont === "serif" ? "Georgia, serif" : formFont === "monospace" ? "ui-monospace, monospace" : "system-ui, sans-serif"}}>
+    <main className={`tka-shell ${ux.enabled?'student-ux':''}`} style={{fontFamily: formFont === "serif" ? "Georgia, serif" : formFont === "monospace" ? "ui-monospace, monospace" : "system-ui, sans-serif"}}>
       <header className="tka-header" style={/^#[0-9a-f]{6}$/i.test(themeColor) ? {backgroundColor:themeColor} : undefined}>
         <div className="flex items-center gap-3">
           <GraduationCap size={36} />
@@ -159,12 +172,13 @@ export function TkaExamPlayer({
         <span>{student}</span>
       </header>
       <section className="tka-exam">
-        {headerImage && <div className="form-header-image mb-4"><ProtectedQuestionMedia media={{assetId:headerImage.assetId,kind:'image'}} accessToken={accessToken} alt={headerImage.alt}/></div>}
+        {headerImage && <div className="form-header-image mb-4"><ProtectedQuestionMedia media={{assetId:headerImage.assetId,kind:'image'}} accessToken={accessToken} alt={headerImage.alt} presentation="header"/></div>}
         {notice}
         {progressBar && <div className="mb-3"><label htmlFor="tka-progress" className="text-sm">{items.filter(answered).length} dari {items.length} soal terjawab</label><progress id="tka-progress" className="block h-2 w-full accent-blue-700" max={items.length} value={items.filter(answered).length}/></div>}
         <div className="tka-exam-top">
           <div>
-            <h1>Soal nomor {index + 1}</h1>
+            <h1 ref={questionHeading} tabIndex={-1}>Soal nomor {index + 1}{ux.enabled?` dari ${items.length}`:''}</h1>
+            {ux.enabled&&<p className="student-progress">{items.filter(answered).length} terjawab · {empty.length} kosong · {marked.length} ragu-ragu</p>}
             <div className="flex items-center gap-1 text-xs">
               Ukuran font soal:
               {[15, 18, 22].map((size) => (
@@ -190,6 +204,7 @@ export function TkaExamPlayer({
               className={`tka-time ${remaining <= 300000 ? "bg-rose-100 text-rose-800" : remaining <= 900000 ? "bg-orange-100 text-orange-800" : "bg-emerald-50 text-emerald-800"}`}
             >
               Sisa Waktu: <b className="ml-1 font-mono">{timeText}</b>
+              {ux.enabled&&!preview&&remaining<=900000&&<span className="student-timer-warning">{remaining===0?'Waktu berakhir':remaining<=300000?'Waktu hampir habis':'Sisa waktu kurang dari 15 menit'}</span>}
             </span>
             <button className="tka-pill" onClick={() => setModal("palette")}>
               Daftar Soal
@@ -199,7 +214,7 @@ export function TkaExamPlayer({
               <p
                 role="status"
                 aria-live="polite"
-                className="flex items-center gap-1"
+                className={ux.enabled?'student-save-line':'flex items-center gap-1'}
               >
                 {saveState === "offline" ? (
                   <CloudOff size={14} />
@@ -207,14 +222,14 @@ export function TkaExamPlayer({
                   <Cloud size={14} />
                 )}{" "}
                 {preview ? "Pratinjau — tidak direkam" : saveState === "saved"
-                  ? "Tersimpan"
+                  ? ux.enabled?`Tersimpan di server${online?'':' · offline'}`:"Tersimpan"
                   : saveState === "saving"
                     ? "Menyimpan…"
                     : saveState === "offline"
-                      ? `Offline · ${queueCount} perubahan lokal`
+                      ? `Offline · ${queueCount} perubahan ${ux.enabled?'tersimpan di perangkat':'lokal'}`
                       : saveState === "conflict"
                         ? "Konflik — pilih versi"
-                        : "Gagal menyimpan"}
+                        : ux.enabled ? "Belum tersimpan di server — periksa koneksi" : "Gagal menyimpan"}
               </p>
             </div>
           </div>
@@ -234,13 +249,16 @@ export function TkaExamPlayer({
             }}
             className="tka-stimulus"
             aria-label="Bahan bacaan atau stimulus"
+            tabIndex={ux.enabled?0:undefined}
           >
+            {ux.enabled&&<><h2 className="student-pane-title">Bahan untuk soal ini</h2><button type="button" className="student-jump" onClick={()=>jump('answer')}>Ke pertanyaan ↓</button></>}
             <StimulusContent
               rows={question.stimulus || []}
               accessToken={accessToken}
             />
           </div>
-          <div className="tka-answer">
+          <div className="tka-answer" ref={answerPane} tabIndex={ux.enabled?0:undefined}>
+            {ux.enabled&&question.stimulus?.length? <button type="button" className="student-jump" onClick={()=>jump('stimulus')}>↑ Kembali ke bahan</button>:null}
             <p className="mb-4 whitespace-pre-wrap leading-relaxed">
               <RichText text={question.prompt} parts={question.config?.promptRich}/>
               {question.config?.required && (
@@ -264,7 +282,9 @@ export function TkaExamPlayer({
             />
           </div>
         </div>
+        {ux.enabled&&!preview&&remaining<=900000&&<p role="status" className="student-disabled-reason">{remaining===0?'Waktu telah berakhir. Jawaban tersimpan diproses oleh server.':remaining<=300000?'Sisa waktu 5 menit atau kurang. Periksa jawaban sebelum mengirim.':'Sisa waktu 15 menit atau kurang.'}</p>}
         <nav className="tka-bottom" aria-label="Navigasi pengerjaan">
+          {ux.enabled&&<div className="student-mobile-status"><span>Soal {index+1}/{items.length}</span><span className={`tka-time ${remaining<=300000?'text-rose-800':remaining<=900000?'text-orange-800':'text-emerald-800'}`} aria-live="off" aria-label={`Sisa waktu ${timeText}`}>{preview?'Pratinjau':`Sisa ${timeText}`}</span></div>}
           <button
             className="tka-prev"
             disabled={index === 0}
@@ -340,7 +360,8 @@ export function TkaExamPlayer({
                   {items.filter(answered).length}/{items.length} terjawab ·{" "}
                   {marked.length} ragu-ragu
                 </p>
-                <div className="grid grid-cols-5 gap-2">
+                {ux.enabled&&<div className="student-palette-legend"><span>✓ Terjawab</span><span>⚑ Ragu-ragu</span><span>○ Kosong</span><span>Garis biru: soal aktif</span></div>}
+                <div className={`grid grid-cols-5 gap-2 ${ux.enabled?'student-palette':''}`}>
                   {items.map((row, i) => (
                     <button
                       key={row.id}
@@ -349,10 +370,9 @@ export function TkaExamPlayer({
                       aria-label={`Soal ${i + 1}, ${row.flagged ? "ragu-ragu" : answered(row) ? "terjawab" : "kosong"}`}
                       onClick={() => {
                         onIndex(i);
-                        setModal("");
                       }}
                     >
-                      {i + 1}
+                      <span>{i + 1}{ux.enabled&&<small className="block" aria-hidden="true">{row.flagged?'⚑':answered(row)?'✓':'○'}</small>}</span>
                     </button>
                   ))}
                 </div>
@@ -413,7 +433,6 @@ export function TkaExamPlayer({
                           className="form-icon border"
                           onClick={() => {
                             onIndex(items.findIndex((i) => i.id === row.id));
-                            setModal("");
                           }}
                         >
                           {items.findIndex((i) => i.id === row.id) + 1}
@@ -435,10 +454,12 @@ export function TkaExamPlayer({
                   </span>
                 </label>
                 <p className="text-sm text-slate-600">{preview ? "Mode pratinjau: tidak ada percobaan siswa atau nilai yang dibuat." : "Jawaban akan dikunci setelah pengiriman berhasil. Soal wajib dan jalur percabangan diperiksa server."}</p>
+                {ux.enabled&&submitError&&<p role="alert" className="student-disabled-reason">{submitError}</p>}
+                {ux.enabled&&(!online||remaining===0||!integrity||saveState==='conflict')&&<p className="student-disabled-reason">{!online?'Hubungkan internet untuk mengirim. Jawaban lokal tetap disimpan.':remaining===0?'Waktu sudah berakhir. Tunggu konfirmasi server.':saveState==='conflict'?'Tutup panel ini dan pilih versi jawaban yang akan digunakan sebelum mengirim.':'Centang pernyataan di atas setelah memeriksa jawaban.'}</p>}
                 <button
                   className="form-button"
                   disabled={
-                    !integrity || busy || !navigator.onLine || remaining === 0
+                    !integrity || busy || !online || remaining === 0 || (ux.enabled&&saveState==='conflict')
                   }
                   onClick={() => void submit()}
                 >
